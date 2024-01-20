@@ -23,10 +23,8 @@ pub fn build(b: *std.build.Builder) void {
 }
 
 pub fn link(b: *std.build.Builder, step: *std.Build.CompileStep) void {
-    const target = b.standardTargetOptions(.{});
-
     const glfw_dep = b.dependency("mach_glfw", .{
-        .target = target,
+        .target = step.target,
         .optimize = .ReleaseSafe,
     });
     @import("mach_glfw").link(glfw_dep.builder, step);
@@ -34,7 +32,7 @@ pub fn link(b: *std.build.Builder, step: *std.Build.CompileStep) void {
     const stb_lib = b.addStaticLibrary(.{
         .name = "stb-lib",
         .root_source_file = .{ .path = "src/stb_impls.c" },
-        .target = target,
+        .target = step.target,
         .optimize = .ReleaseSafe,
     });
     stb_lib.addIncludePath(.{ .path = "src" });
