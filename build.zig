@@ -15,7 +15,7 @@ pub fn build(b: *std.build.Builder) void {
     const opts_mod = options.createModule();
 
     _ = b.addModule("zig-ui", .{
-        .source_file = .{ .path = "src/main.zig" },
+        .source_file = .{ .path = "zig_ui.zig" },
         .dependencies = &.{
             .{ .name = "mach-glfw", .module = glfw_mod },
             .{ .name = "build_opts", .module = opts_mod },

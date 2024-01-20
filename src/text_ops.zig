@@ -1,5 +1,5 @@
 const std = @import("std");
-const zig_ui = @import("main.zig");
+const zig_ui = @import("../zig_ui.zig");
 const glfw = zig_ui.glfw;
 
 pub const TextAction = struct {

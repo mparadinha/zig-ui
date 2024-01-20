@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const zig_ui = @import("main.zig");
+const zig_ui = @import("../zig_ui.zig");
 const gl = zig_ui.gl;
 const vec2 = zig_ui.vec2;
 const gfx = @import("graphics.zig");
