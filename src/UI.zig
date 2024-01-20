@@ -103,9 +103,9 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
     return UI{
         .allocator = allocator,
         .generic_shader = gfx.Shader.from_srcs(allocator, "ui_generic", .{
-            .vertex = @embedFile("ui/shader.vert"),
-            .geometry = @embedFile("ui/shader.geom"),
-            .fragment = @embedFile("ui/shader.frag"),
+            .vertex = @embedFile("shader.vert"),
+            .geometry = @embedFile("shader.geom"),
+            .fragment = @embedFile("shader.frag"),
         }),
         .font = try Font.from_ttf(allocator, font_opts.font_path),
         .font_bold = try Font.from_ttf(allocator, font_opts.bold_font_path),
