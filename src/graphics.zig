@@ -1,9 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const gl = @import("gl_4v3.zig");
-const vec2 = @Vector(2, f32);
-const vec3 = @Vector(3, f32);
-const vec4 = @Vector(4, f32);
+const zig_ui = @import("main.zig");
+const gl = zig_ui.gl;
+const vec2 = zig_ui.vec2;
+const vec3 = zig_ui.vec3;
+const vec4 = zig_ui.vec4;
 
 pub const Mesh = struct {
     vao: u32,

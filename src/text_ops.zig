@@ -1,5 +1,6 @@
 const std = @import("std");
-const glfw = @import("mach-glfw");
+const zig_ui = @import("main.zig");
+const glfw = zig_ui.glfw;
 
 pub const TextAction = struct {
     flags: struct {

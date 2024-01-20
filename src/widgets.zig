@@ -3,12 +3,12 @@
 const std = @import("std");
 const clamp = std.math.clamp;
 const fabs = std.math.fabs;
-const vec2 = @Vector(2, f32);
-const vec3 = @Vector(3, f32);
-const vec4 = @Vector(4, f32);
-const glfw = @import("mach-glfw");
-
-const UI = @import("UI.zig");
+const zig_ui = @import("main.zig");
+const vec2 = zig_ui.vec2;
+const vec3 = zig_ui.vec3;
+const vec4 = zig_ui.vec4;
+const glfw = zig_ui.glfw;
+const UI = zig_ui.UI;
 const Node = UI.Node;
 const Signal = UI.Signal;
 const Rect = UI.Rect;

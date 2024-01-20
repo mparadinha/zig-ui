@@ -1,15 +1,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const clamp = std.math.clamp;
-const gl = @import("gl_4v3.zig");
-const gfx = @import("graphics.zig");
-const vec2 = @Vector(2, f32);
-const vec3 = @Vector(3, f32);
-const vec4 = @Vector(4, f32);
+const zig_ui = @import("main.zig");
+const gl = zig_ui.gl;
+const vec2 = zig_ui.vec2;
+const vec3 = zig_ui.vec3;
+const vec4 = zig_ui.vec4;
+const glfw = zig_ui.glfw;
+const Window = zig_ui.Window;
 const Font = @import("Font.zig");
-const Window = @import("Window.zig");
-
-const glfw = @import("mach-glfw");
+const gfx = @import("graphics.zig");
 
 const build_opts = @import("build_opts");
 

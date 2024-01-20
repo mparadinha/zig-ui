@@ -1,9 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const gl = @import("gl_4v3.zig");
-const vec2 = @Vector(2, f32);
-const uvec2 = @Vector(2, u32);
-const glfw = @import("mach-glfw");
+const zig_ui = @import("main.zig");
+const gl = zig_ui.gl;
+const vec2 = zig_ui.vec2;
+const vec4 = zig_ui.vec4;
+const uvec2 = zig_ui.uvec2;
+const glfw = zig_ui.glfw;
 
 const Window = @This();
 
@@ -101,6 +103,13 @@ pub fn finishSetup(self: *Window) void {
 
 pub fn shouldClose(self: *Window) bool {
     return self.window.shouldClose();
+}
+
+pub fn clear(self: *Window, color: vec4) void {
+    const fb_size = self.getFramebufferSize();
+    gl.viewport(0, 0, @as(i32, @intCast(fb_size[0])), @as(i32, @intCast(fb_size[1])));
+    gl.clearColor(color[0], color[1], color[2], color[3]);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 }
 
 pub fn update(self: *Window) void {

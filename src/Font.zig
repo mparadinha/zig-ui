@@ -1,8 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const gl = @import("gl_4v3.zig");
+const zig_ui = @import("main.zig");
+const gl = zig_ui.gl;
+const vec2 = zig_ui.vec2;
 const gfx = @import("graphics.zig");
-const vec2 = @Vector(2, f32);
 const c = @cImport({
     @cInclude("stb_rect_pack.h");
     @cInclude("stb_truetype.h");
