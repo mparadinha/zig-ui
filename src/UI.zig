@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const clamp = std.math.clamp;
 const gl = @import("gl_4v3.zig");
 const gfx = @import("graphics.zig");
 const vec2 = @Vector(2, f32);
@@ -1278,7 +1279,7 @@ fn solveUpwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
     switch (node.pref_size[axis_idx]) {
         .percent => |percent| {
             const parent_size = if (node.parent) |p|
-                p.calc_size - math.times(p.padding, 2)
+                p.calc_size - p.padding * vec2{ 2, 2 }
             else
                 self.screen_size;
             node.calc_size[axis_idx] = parent_size[axis_idx] * percent.value;
@@ -1294,7 +1295,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
     const is_layout_axis = (axis == node.child_layout_axis);
 
-    const available_size = node.calc_size - math.times(node.padding, 2);
+    const available_size = node.calc_size - node.padding * vec2{ 2, 2 };
 
     // collect sizing information about children
     var total_children_size: f32 = 0;
@@ -1365,8 +1366,8 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
 
     // constrain scrolling to children size, i.e. don't scroll more than is possible
     node.scroll_offset[axis_idx] = switch (axis) {
-        .x => std.math.clamp(node.scroll_offset[axis_idx], -overflow, 0),
-        .y => std.math.clamp(node.scroll_offset[axis_idx], 0, overflow),
+        .x => clamp(node.scroll_offset[axis_idx], -overflow, 0),
+        .y => clamp(node.scroll_offset[axis_idx], 0, overflow),
     };
 }
 
@@ -2084,7 +2085,7 @@ pub const DebugView = struct {
         }
         if (selected_nodes.items.len == 0) return;
 
-        self.node_list_idx = std.math.clamp(self.node_list_idx, 0, selected_nodes.items.len - 1);
+        self.node_list_idx = clamp(self.node_list_idx, 0, selected_nodes.items.len - 1);
         const active_node = selected_nodes.items[self.node_list_idx];
 
         try self.ui.startBuild(width, height, mouse_pos, events, window);
@@ -2116,7 +2117,7 @@ pub const DebugView = struct {
                 .border_color = vec4{ 0, 0, 1, 0.5 },
                 .rel_pos = RelativePlacement.simple(active_node.rect.min + active_node.padding),
                 .pref_size = size: {
-                    const size = active_node.rect.size() - math.times(active_node.padding, 2);
+                    const size = active_node.rect.size() - active_node.padding * vec2{ 2, 2 };
                     break :size Size.exact(.pixels, size[0], size[1]);
                 },
             });

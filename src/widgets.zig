@@ -1,6 +1,8 @@
 // there's no need to manually include this file, it's already provided by UI.zig
 
 const std = @import("std");
+const clamp = std.math.clamp;
+const fabs = std.math.fabs;
 const vec2 = @Vector(2, f32);
 const vec3 = @Vector(3, f32);
 const vec4 = @Vector(4, f32);
@@ -121,7 +123,7 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
     // TODO: generalizing this to y-axis slider so it can be used for scroll bars and stuff like volume sliders
     // TODO: maybe add a more generic slider functions like `sliderOptions` or `sliderExtra` or `sliderOpts` or `sliderEx`
 
-    value_ptr.* = std.math.clamp(value_ptr.*, min, max);
+    value_ptr.* = clamp(value_ptr.*, min, max);
 
     const style = ui.topStyle();
 
@@ -157,7 +159,7 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
     }, "", .{
         .bg_color = style.text_color,
         .pref_size = Size.flexible(.pixels, handle_radius * 2, handle_radius * 2),
-        .corner_radii = math.splat(vec4, handle_radius),
+        .corner_radii = @splat(handle_radius),
         .rel_pos = RelativePlacement{
             .target = .center,
             .anchor = .middle_left,
@@ -166,16 +168,16 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
     });
 
     if (scroll_zone.signal.held_down) {
-        handle.rel_pos.diff[0] = std.math.clamp(
+        handle.rel_pos.diff[0] = clamp(
             scroll_zone.signal.mouse_pos[0],
             handle_radius,
             @max(handle_radius, scroll_zone.rect.size()[0] - handle_radius),
         );
-        const percentage = std.math.clamp(scroll_zone.signal.mouse_pos[0] / scroll_zone.rect.size()[0], 0, 1);
+        const percentage = clamp(scroll_zone.signal.mouse_pos[0] / scroll_zone.rect.size()[0], 0, 1);
         value_ptr.* = min + (max - min) * percentage;
     }
 
-    value_ptr.* = std.math.clamp(value_ptr.*, min, max);
+    value_ptr.* = clamp(value_ptr.*, min, max);
 }
 
 pub fn checkBox(ui: *UI, string: []const u8, value: *bool) Signal {
@@ -332,7 +334,7 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
             const scroll_size = end_scroll - start_scroll;
             const bar_region_size = scroll_bar_region.rect.size()[1];
             const mouse_bar_pct = (scroll_bar_region.rect.max[1] - ui.mouse_pos[1]) / bar_region_size;
-            const bar_pct = std.math.clamp(mouse_bar_pct, 0, 1);
+            const bar_pct = clamp(mouse_bar_pct, 0, 1);
 
             if (scroll_bar_region.signal.held_down) {
                 parent.scroll_offset[1] = (scroll_size * bar_pct) + start_scroll;
@@ -347,8 +349,8 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
             const icon_size = bar_icon_node.text_rect.size()[1];
             bar_icon_node.rel_pos = RelativePlacement.match(.top_left);
             bar_icon_node.rel_pos.diff[1] = if (bar_region_size > 0) blk: {
-                const scroll_pct = std.math.clamp((parent.scroll_offset[1] - start_scroll) / scroll_size, 0, 1);
-                break :blk -std.math.clamp(
+                const scroll_pct = clamp((parent.scroll_offset[1] - start_scroll) / scroll_size, 0, 1);
+                break :blk -clamp(
                     (bar_region_size * scroll_pct) - (icon_size / 2),
                     0,
                     bar_region_size - icon_size,
@@ -441,7 +443,7 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
     const sig = widget_node.signal;
 
     // make input box darker when not in focus
-    if (!sig.focused) widget_node.bg_color = math.times(widget_node.bg_color, 0.85);
+    if (!sig.focused) widget_node.bg_color = widget_node.bg_color * @as(vec4, @splat(0.85));
 
     // we can't use a simple label because the position of text_node needs to be saved across frames
     // (we can't just rely on the cursor for this information; imagine doing `End` + `LeftArrow`, for example)
@@ -461,7 +463,7 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
 
     const cursor_height = ui.font.getScaledMetrics(font_pixel_size).line_advance - text_padd[1];
     const cursor_rel_pos = vec2{ rect_before_cursor.max[0], 0 } + text_padd;
-    const selection_size = std.math.fabs(rect_before_mark.max[0] - rect_before_cursor.max[0]);
+    const selection_size = fabs(rect_before_mark.max[0] - rect_before_cursor.max[0]);
     const selection_start = @min(rect_before_mark.max[0], rect_before_cursor.max[0]);
     const selection_rel_pos = vec2{ selection_start, 0 } + text_padd;
 
@@ -610,11 +612,11 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                 { // circle cursor
                     const center = node.rect.min + vec2{ hue[1], hue[2] } * node.rect.size();
                     const radius: f32 = 10;
-                    const radius_vec = math.splat(vec2, radius);
-                    rect.top_left_color = math.splat(vec4, 1);
-                    rect.btm_left_color = math.splat(vec4, 1);
-                    rect.top_right_color = math.splat(vec4, 1);
-                    rect.btm_right_color = math.splat(vec4, 1);
+                    const radius_vec: vec2 = @splat(radius);
+                    rect.top_left_color = @splat(1);
+                    rect.btm_left_color = @splat(1);
+                    rect.top_right_color = @splat(1);
+                    rect.btm_right_color = @splat(1);
                     rect.btm_left_pos = center - radius_vec;
                     rect.top_right_pos = center + radius_vec;
                     rect.corner_radii = [4]f32{ radius, radius, radius, radius };
@@ -628,8 +630,8 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     });
     if (color_square.signal.held_down) {
         const norm = color_square.signal.mouse_pos / color_square.rect.size();
-        hsv[1] = std.math.clamp(norm[0], 0, 1);
-        hsv[2] = std.math.clamp(norm[1], 0, 1);
+        hsv[1] = clamp(norm[0], 0, 1);
+        hsv[2] = clamp(norm[1], 0, 1);
     }
 
     ui.spacer(.x, Size.pixels(3, 1));
@@ -664,7 +666,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
 
                 inline for (@typeInfo(@TypeOf(rect)).Struct.fields) |field| {
                     if (comptime std.mem.endsWith(u8, field.name, "color"))
-                        @field(rect, field.name) = math.splat(vec4, 1);
+                        @field(rect, field.name) = @splat(1);
                 }
                 rect.edge_softness = 1;
                 rect.border_thickness = 2;
@@ -673,7 +675,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                 const bar_size: f32 = 10;
                 const center_y = blk: {
                     var center = node.rect.max[1] - node.rect.size()[1] * hsv0;
-                    break :blk std.math.clamp(
+                    break :blk clamp(
                         center,
                         node.rect.min[1] + bar_size / 2,
                         node.rect.max[1] - bar_size / 2,
@@ -688,7 +690,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     });
     if (hue_bar.signal.held_down) {
         const norm = hue_bar.signal.mouse_pos / hue_bar.rect.size();
-        hsv[0] = std.math.clamp(1 - norm[1], 0, 1);
+        hsv[0] = clamp(1 - norm[1], 0, 1);
     }
 
     ui.spacer(.x, Size.pixels(3, 1));
@@ -742,7 +744,7 @@ fn RGBtoHSV(rgba: vec4) vec4 {
 fn HSVtoRGB(hsva: vec4) vec4 {
     const h = (hsva[0] * 360) / 60;
     const C = hsva[2] * hsva[1];
-    const X = C * (1 - std.math.fabs(@mod(h, 2) - 1));
+    const X = C * (1 - fabs(@mod(h, 2) - 1));
     const rgb_l = switch (@as(u32, @intFromFloat(@floor(h)))) {
         0 => vec3{ C, X, 0 },
         1 => vec3{ X, C, 0 },
