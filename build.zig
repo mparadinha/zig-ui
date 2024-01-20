@@ -35,6 +35,7 @@ pub fn link(b: *std.build.Builder, step: *std.Build.CompileStep) void {
         .target = step.target,
         .optimize = .ReleaseSafe,
     });
+    stb_lib.linkLibC();
     stb_lib.addIncludePath(.{ .path = "src" });
     b.installArtifact(stb_lib);
 
