@@ -1,0 +1,10 @@
+.{
+    .name = "zig-ui",
+    .version = "0.0.1",
+    .dependencies = .{
+        .mach_glfw = .{
+            .url = "https://pkg.machengine.org/mach-glfw/076b3869cbfd2ccccb6a8c01e4128bb0d7977ebb.tar.gz",
+            .hash = "1220cafbb90ea86d92c07f779e8106e6f5c3d8ab4cc68ddc8d3f80bd4b6079064135",
+        },
+    },
+}
