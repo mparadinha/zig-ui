@@ -263,7 +263,7 @@ pub const Style = struct {
     corner_radii: [4]f32 = [4]f32{ 0, 0, 0, 0 },
     edge_softness: f32 = 0,
     border_thickness: f32 = 0,
-    size: [2]Size = .{ Size.text_dim(1), Size.text_dim(1) },
+    size: [2]Size = .{ Size.text(1), Size.text(1) },
     layout_axis: Axis = .y,
     cursor_type: Cursor = .arrow,
     font_type: FontType = .text,
@@ -277,21 +277,21 @@ pub const Style = struct {
 
 pub const Size = union(enum) {
     pixels: struct { value: f32, strictness: f32 },
-    text_dim: struct { strictness: f32 },
+    text: struct { strictness: f32 },
     percent: struct { value: f32, strictness: f32 },
-    by_children: struct { strictness: f32 },
+    children: struct { strictness: f32 },
 
     pub fn pixels(value: f32, strictness: f32) Size {
         return Size{ .pixels = .{ .value = value, .strictness = strictness } };
     }
-    pub fn text_dim(strictness: f32) Size {
-        return Size{ .text_dim = .{ .strictness = strictness } };
+    pub fn text(strictness: f32) Size {
+        return Size{ .text = .{ .strictness = strictness } };
     }
     pub fn percent(value: f32, strictness: f32) Size {
         return Size{ .percent = .{ .value = value, .strictness = strictness } };
     }
-    pub fn by_children(strictness: f32) Size {
-        return Size{ .by_children = .{ .strictness = strictness } };
+    pub fn children(strictness: f32) Size {
+        return Size{ .children = .{ .strictness = strictness } };
     }
 
     pub fn getStrictness(self: Size) f32 {
@@ -319,7 +319,7 @@ pub const Size = union(enum) {
     }
 
     pub fn fillByChildren(x_strictness: f32, y_strictness: f32) [2]Size {
-        return [2]Size{ Size.by_children(x_strictness), Size.by_children(y_strictness) };
+        return [2]Size{ Size.children(x_strictness), Size.children(y_strictness) };
     }
 
     pub fn fillAxis(axis: Axis, other_size: Size) [2]Size {
@@ -339,9 +339,9 @@ pub const Size = union(enum) {
         _ = fmt;
         switch (value) {
             .pixels => |v| try writer.print("pixels({d}, {d})", .{ v.value, v.strictness }),
-            .text_dim => |v| try writer.print("text_dim({d})", .{v.strictness}),
+            .text => |v| try writer.print("text({d})", .{v.strictness}),
             .percent => |v| try writer.print("percent({d}, {d})", .{ v.value, v.strictness }),
-            .by_children => |v| try writer.print("by_children({d})", .{v.strictness}),
+            .children => |v| try writer.print("children({d})", .{v.strictness}),
         }
     }
 };
@@ -1227,7 +1227,7 @@ fn solveIndependentSizesWorkFn(self: *UI, node: *Node, axis: Axis) void {
         // and upper bound on the size, which might be needed for "downward dependent" nodes
         // which have children with `Size.percent`
         .percent,
-        .text_dim,
+        .text,
         => {
             const text_size = node.text_rect.size();
             const text_padding = self.textPadding(node)[axis_idx];
@@ -1273,7 +1273,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
     };
 
     switch (node.size[axis_idx]) {
-        .by_children => {
+        .children => {
             if (is_layout_axis) {
                 node.calc_size[axis_idx] = child_funcs.sumChildrenSizes(node, axis_idx);
             } else {
@@ -1978,10 +1978,10 @@ pub fn dumpNodeTree(self: *UI) void {
     }
 }
 
-pub fn dumpNodeTreeGraph(self: *UI, root: *Node, save_path: []const u8) !void {
-    const savefile = try std.fs.cwd().createFile(save_path, .{});
-    defer savefile.close();
-    var writer = savefile.writer();
+pub fn dumpNodeTreeGraph(self: *UI, root: *Node, file: std.fs.File) !void {
+    _ = root;
+
+    var writer = file.writer();
 
     _ = try writer.write("digraph {\n");
     _ = try writer.write("  overlap=true;\n");
@@ -1998,11 +1998,11 @@ pub fn dumpNodeTreeGraph(self: *UI, root: *Node, save_path: []const u8) !void {
             if (@field(node.flags, field.name)) _ = try writer.write(field.name ++ ",");
         }
         try writer.print("\"];\n", .{});
-        if (node.parent) |other| try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"parent\"];\n", .{ @intFromPtr(node), @intFromPtr(other) });
-        if (node.first) |other| try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"first\"];\n", .{ @intFromPtr(node), @intFromPtr(other) });
-        if (node.last) |other| try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"last\"];\n", .{ @intFromPtr(node), @intFromPtr(other) });
-        if (node.next) |other| try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"next\"];\n", .{ @intFromPtr(node), @intFromPtr(other) });
-        if (node.prev) |other| try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"prev\"];\n", .{ @intFromPtr(node), @intFromPtr(other) });
+        const tree_fields = &.{ "parent", "first", "last", "next", "prev" };
+        for (tree_fields) |field| {
+            if (@field(node, field)) |other|
+                try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"{}\"];\n", .{ @intFromPtr(node), @intFromPtr(other), field });
+        }
     }
 
     node_iter = self.node_table.valueIterator();
@@ -2022,8 +2022,6 @@ pub fn dumpNodeTreeGraph(self: *UI, root: *Node, save_path: []const u8) !void {
     }
 
     _ = try writer.write("}\n");
-
-    _ = root;
 }
 
 pub const DebugView = struct {
@@ -2146,7 +2144,7 @@ pub const DebugView = struct {
                 .clip_children = true,
             }, "", .{
                 .layout_axis = .y,
-                .size = [2]Size{ Size.by_children(0.5), Size.by_children(1) },
+                .size = [2]Size{ Size.children(0.5), Size.children(1) },
             });
             self.ui.pushParent(left_bg_node);
             defer self.ui.popParentAssert(left_bg_node);
@@ -2168,7 +2166,7 @@ pub const DebugView = struct {
                 .clip_children = true,
             }, "", .{
                 .layout_axis = .y,
-                .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+                .size = [2]Size{ Size.children(1), Size.children(1) },
             });
             self.ui.pushParent(right_bg_node);
             defer self.ui.popParentAssert(right_bg_node);
@@ -2221,7 +2219,7 @@ pub const DebugView = struct {
                 .clip_children = true,
             }, "#help_bg_node", .{
                 .layout_axis = .y,
-                .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+                .size = [2]Size{ Size.children(1), Size.children(1) },
             });
             self.ui.pushParent(help_bg_node);
             defer self.ui.popParentAssert(help_bg_node);

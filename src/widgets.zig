@@ -181,7 +181,7 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
 }
 
 pub fn checkBox(ui: *UI, string: []const u8, value: *bool) Signal {
-    const parent_size = [2]Size{ Size.by_children(1), Size.by_children(1) };
+    const parent_size = [2]Size{ Size.children(1), Size.children(1) };
     const layout_parent = ui.pushLayoutParentF("{s}_layout_parent", .{string}, parent_size, .x);
     layout_parent.flags.draw_background = true;
     defer ui.popParentAssert(layout_parent);
@@ -228,7 +228,7 @@ pub fn startCtxMenu(ui: *UI, pos: ?RelativePlacement) void {
         .floating_x = true,
         .floating_y = true,
     }, "INTERNAL_CTX_MENU_ROOT_NODE", .{
-        .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+        .size = [2]Size{ Size.children(1), Size.children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
     });
@@ -253,7 +253,7 @@ pub fn startTooltip(ui: *UI, pos: ?RelativePlacement) void {
         .floating_x = true,
         .floating_y = true,
     }, "INTERNAL_TOOLTIP_ROOT_NODE", .{
-        .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+        .size = [2]Size{ Size.children(1), Size.children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
         .rel_pos = pos orelse RelativePlacement.absolute(.{ .top_left = ui.mouse_pos }),
@@ -313,7 +313,7 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
 
     const bar_node = ui.addNode(.{ .draw_background = true, .no_id = true, .floating_x = true }, "", .{});
     bar_node.layout_axis = .y;
-    bar_node.size = [2]Size{ Size.by_children(1), Size.percent(1, 0) };
+    bar_node.size = [2]Size{ Size.children(1), Size.percent(1, 0) };
     bar_node.bg_color = vec4{ 0, 0, 0, 0.3 };
     bar_node.rel_pos = RelativePlacement.match(.top_right);
     {
@@ -367,7 +367,7 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
 
 // TODO
 pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chosen_idx: *usize, is_open: *bool) void {
-    const choice_parent_size = [2]Size{ Size.by_children(1), Size.text_dim(1) };
+    const choice_parent_size = [2]Size{ Size.children(1), Size.text(1) };
     const choice_parent = ui.addNodeF(.{}, "###{s}:choice_parent", .{hash}, .{ .size = choice_parent_size, .layout_axis = .x });
     ui.pushParent(choice_parent);
     {
@@ -381,7 +381,7 @@ pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chos
         const opts_window = ui.startWindow("tmp_opts_window");
         defer ui.endWindow(opts_window);
 
-        const opts_parent_size = [2]Size{ Size.pixels(choice_parent.rect.size()[0], 1), Size.by_children(1) };
+        const opts_parent_size = [2]Size{ Size.pixels(choice_parent.rect.size()[0], 1), Size.children(1) };
         const opts_parent = ui.addNode(.{
             .clip_children = true,
             .draw_background = true,
@@ -402,7 +402,7 @@ pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chos
                 .draw_hot_effects = true,
                 .draw_active_effects = true,
             }, "{s}", .{option}, "{s}:opt_node_#{}", .{ hash, idx }, .{});
-            opt_node.size = [2]Size{ Size.percent(1, 0), Size.text_dim(1) };
+            opt_node.size = [2]Size{ Size.percent(1, 0), Size.text(1) };
             if (opt_node.signal.clicked) chosen_idx.* = idx;
         }
     }
@@ -704,10 +704,10 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     const components = [_][]const u8{ "R", "G", "B", "A" };
     const color_ptr = color;
     for (components, 0..) |comp, idx| {
-        const size = [2]Size{ Size.percent(1, 0), Size.by_children(0) };
+        const size = [2]Size{ Size.percent(1, 0), Size.children(0) };
         const p = ui.pushLayoutParentF("{s}_slider_{s}", .{ hash, comp }, size, .x);
         defer ui.popParentAssert(p);
-        const slider_size = [2]Size{ Size.percent(1, 0), Size.text_dim(1) };
+        const slider_size = [2]Size{ Size.percent(1, 0), Size.text(1) };
         const slider_name = ui.fmtTmpString("{s}_comp_{s}", .{ hash, comp });
         ui.slider(slider_name, slider_size, &color_ptr[idx], 0, 1);
         ui.labelF("{s} {d:1.3}", .{ comp, color_ptr[idx] });

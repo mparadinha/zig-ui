@@ -64,8 +64,6 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
     ui.pushParent(p);
     defer ui.popParentAssert(p);
 
-    ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
-
     const use_child_size = Size.fillByChildren(1, 1);
 
     const pickers = ui.addNode(.{ .draw_text = true, .toggleable = true }, "Color pickers:", .{});
@@ -110,4 +108,6 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
         });
     }
+
+    ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
 }
