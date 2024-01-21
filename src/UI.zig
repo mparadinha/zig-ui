@@ -1403,9 +1403,9 @@ pub fn dumpNodeTreeGraph(self: *UI, root: *Node, file: std.fs.File) !void {
         }
         try writer.print("\"];\n", .{});
         const tree_fields = &.{ "parent", "first", "last", "next", "prev" };
-        for (tree_fields) |field| {
+        inline for (tree_fields) |field| {
             if (@field(node, field)) |other|
-                try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"{}\"];\n", .{ @intFromPtr(node), @intFromPtr(other), field });
+                try writer.print("    Node_0x{x} -> Node_0x{x} [label=\"{s}\"];\n", .{ @intFromPtr(node), @intFromPtr(other), field });
         }
     }
 

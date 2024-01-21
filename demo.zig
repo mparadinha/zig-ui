@@ -110,4 +110,11 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
     }
 
     ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
+
+    if (ui.button("Dump root node tree to `ui_main_tree.dot`").clicked) {
+        const path = "ui_main_tree.dot";
+        const dump_file = try std.fs.cwd().createFile(path, .{});
+        defer dump_file.close();
+        try ui.dumpNodeTreeGraph(ui.root_node.?, dump_file);
+    }
 }
