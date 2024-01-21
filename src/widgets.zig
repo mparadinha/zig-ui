@@ -25,7 +25,7 @@ pub fn spacer(ui: *UI, axis: Axis, size: Size) void {
         .x => [2]Size{ size, Size.percent(0, 0) },
         .y => [2]Size{ Size.percent(0, 0), size },
     };
-    _ = ui.addNode(.{ .no_id = true }, "", .{ .pref_size = sizes });
+    _ = ui.addNode(.{ .no_id = true }, "", .{ .size = sizes });
 }
 
 pub fn label(ui: *UI, string: []const u8) void {
@@ -147,7 +147,7 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
         .no_id = true,
     }, "", .{
         .bg_color = vec4{ 0, 0, 0, 1 },
-        .pref_size = Size.flexible(.percent, 1, 0.2),
+        .size = Size.flexible(.percent, 1, 0.2),
         .rel_pos = RelativePlacement.match(.center),
     });
 
@@ -158,8 +158,8 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
         .no_id = true,
     }, "", .{
         .bg_color = style.text_color,
-        .pref_size = Size.flexible(.pixels, handle_radius * 2, handle_radius * 2),
-        .corner_radii = @splat(handle_radius),
+        .size = Size.flexible(.pixels, handle_radius * 2, handle_radius * 2),
+        .corner_radii = @as(vec4, @splat(handle_radius)),
         .rel_pos = RelativePlacement{
             .target = .center,
             .anchor = .middle_left,
@@ -213,8 +213,8 @@ pub fn pushLayoutParentFlags(
     layout_axis: Axis,
 ) *Node {
     const node = ui.addNodeStrings(flags, "", hash, .{
-        .pref_size = size,
-        .child_layout_axis = layout_axis,
+        .size = size,
+        .layout_axis = layout_axis,
     });
     ui.pushParent(node);
     return node;
@@ -228,7 +228,7 @@ pub fn startCtxMenu(ui: *UI, pos: ?RelativePlacement) void {
         .floating_x = true,
         .floating_y = true,
     }, "INTERNAL_CTX_MENU_ROOT_NODE", .{
-        .pref_size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+        .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
     });
@@ -253,7 +253,7 @@ pub fn startTooltip(ui: *UI, pos: ?RelativePlacement) void {
         .floating_x = true,
         .floating_y = true,
     }, "INTERNAL_TOOLTIP_ROOT_NODE", .{
-        .pref_size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+        .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
         .rel_pos = pos orelse RelativePlacement.absolute(.{ .top_left = ui.mouse_pos }),
@@ -279,7 +279,7 @@ pub fn startWindow(
         .floating_x = true,
         .floating_y = true,
     }, hash, .{
-        .pref_size = size,
+        .size = size,
         .rel_pos = pos,
         .bg_color = vec4{ 0, 0, 0, 0.75 },
     });
@@ -302,7 +302,7 @@ pub fn startScrollRegion(ui: *UI, hash: []const u8) *Node {
         .scroll_children_y = true,
         .clip_children = true,
     }, "###{s}:scroll_region_parent", .{hash}, .{
-        .child_layout_axis = .y,
+        .layout_axis = .y,
     });
     ui.pushParent(parent);
     return parent;
@@ -312,8 +312,8 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
     const hash = parent.hash_string;
 
     const bar_node = ui.addNode(.{ .draw_background = true, .no_id = true, .floating_x = true }, "", .{});
-    bar_node.child_layout_axis = .y;
-    bar_node.pref_size = [2]Size{ Size.by_children(1), Size.percent(1, 0) };
+    bar_node.layout_axis = .y;
+    bar_node.size = [2]Size{ Size.by_children(1), Size.percent(1, 0) };
     bar_node.bg_color = vec4{ 0, 0, 0, 0.3 };
     bar_node.rel_pos = RelativePlacement.match(.top_right);
     {
@@ -326,7 +326,7 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
         const scroll_bar_region = ui.addNodeF(.{
             .clickable = true,
         }, "###{s}:scroll_bar_region", .{hash}, .{});
-        scroll_bar_region.pref_size = [2]Size{ Size.percent(1, 0), Size.percent(1, 0) };
+        scroll_bar_region.size = [2]Size{ Size.percent(1, 0), Size.percent(1, 0) };
         {
             ui.pushParent(scroll_bar_region);
             defer std.debug.assert(ui.popParent() == scroll_bar_region);
@@ -368,7 +368,7 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
 // TODO
 pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chosen_idx: *usize, is_open: *bool) void {
     const choice_parent_size = [2]Size{ Size.by_children(1), Size.text_dim(1) };
-    const choice_parent = ui.addNodeF(.{}, "###{s}:choice_parent", .{hash}, .{ .pref_size = choice_parent_size, .child_layout_axis = .x });
+    const choice_parent = ui.addNodeF(.{}, "###{s}:choice_parent", .{hash}, .{ .size = choice_parent_size, .layout_axis = .x });
     ui.pushParent(choice_parent);
     {
         ui.label(options[chosen_idx.*]);
@@ -388,7 +388,7 @@ pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chos
             .floating_x = true,
             .floating_y = true,
         }, "tmp_opts_window_parent", .{
-            .pref_size = opts_parent_size,
+            .size = opts_parent_size,
             .rel_pos = .{ .target = .top_left, .anchor = .btm_left, .diff = choice_parent.rect.min },
         });
         ui.pushParent(opts_parent);
@@ -402,7 +402,7 @@ pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chos
                 .draw_hot_effects = true,
                 .draw_active_effects = true,
             }, "{s}", .{option}, "{s}:opt_node_#{}", .{ hash, idx }, .{});
-            opt_node.pref_size = [2]Size{ Size.percent(1, 0), Size.text_dim(1) };
+            opt_node.size = [2]Size{ Size.percent(1, 0), Size.text_dim(1) };
             if (opt_node.signal.clicked) chosen_idx.* = idx;
         }
     }
@@ -429,7 +429,7 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
         .draw_background = true,
         .draw_border = true,
     }, "", .{}, "{s}", .{hash}, .{
-        .child_layout_axis = .x,
+        .layout_axis = .x,
         .cursor_type = .ibeam,
     });
     if (widget_node.first_time) {
@@ -475,12 +475,12 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
     };
     const cursor_node = ui.addNode(filled_rect_flags, "", .{
         .bg_color = vec4{ 0, 0, 0, 1 },
-        .pref_size = Size.exact(.pixels, 1, cursor_height),
+        .size = Size.exact(.pixels, 1, cursor_height),
         .rel_pos = RelativePlacement.simple(text_node.rel_pos.diff + cursor_rel_pos),
     });
     _ = ui.addNode(filled_rect_flags, "", .{
         .bg_color = vec4{ 0, 0, 1, 0.25 },
-        .pref_size = Size.exact(.pixels, selection_size, cursor_height),
+        .size = Size.exact(.pixels, selection_size, cursor_height),
         .rel_pos = RelativePlacement.simple(text_node.rel_pos.diff + selection_rel_pos),
     });
 
@@ -583,15 +583,15 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
         .draw_background = true,
         .no_id = true,
     }, "", hash, .{
-        .pref_size = Size.fillByChildren(1, 1),
-        .child_layout_axis = .x,
+        .size = Size.fillByChildren(1, 1),
+        .layout_axis = .x,
         .padding = vec2{ 5, 5 },
     });
     ui.pushParent(background_node);
     defer ui.popParentAssert(background_node);
 
     const color_square = ui.addNodeF(.{ .clickable = true }, "{s}_square", .{hash}, .{
-        .pref_size = Size.exact(.pixels, square_size, square_size),
+        .size = Size.exact(.pixels, square_size, square_size),
         .custom_draw_fn = (struct {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 const hue = @as(*align(1) const vec4, @ptrCast(node.custom_draw_ctx_as_bytes.?.ptr)).*;
@@ -613,10 +613,10 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                     const center = node.rect.min + vec2{ hue[1], hue[2] } * node.rect.size();
                     const radius: f32 = 10;
                     const radius_vec: vec2 = @splat(radius);
-                    rect.top_left_color = @splat(1);
-                    rect.btm_left_color = @splat(1);
-                    rect.top_right_color = @splat(1);
-                    rect.btm_right_color = @splat(1);
+                    rect.top_left_color = @as(vec4, @splat(1));
+                    rect.btm_left_color = @as(vec4, @splat(1));
+                    rect.top_right_color = @as(vec4, @splat(1));
+                    rect.btm_right_color = @as(vec4, @splat(1));
                     rect.btm_left_pos = center - radius_vec;
                     rect.top_right_pos = center + radius_vec;
                     rect.corner_radii = [4]f32{ radius, radius, radius, radius };
@@ -637,7 +637,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     ui.spacer(.x, Size.pixels(3, 1));
 
     const hue_bar = ui.addNodeF(.{ .clickable = true, .draw_background = true }, "{s}_hue_bar", .{hash}, .{
-        .pref_size = Size.exact(.pixels, square_size / 10, square_size),
+        .size = Size.exact(.pixels, square_size / 10, square_size),
         .custom_draw_fn = (struct {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 var rect = UI.ShaderInput.fromNode(node);
@@ -664,10 +664,10 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                     rect.btm_left_pos[1] = rect.top_right_pos[1] - segment_height;
                 }
 
-                inline for (@typeInfo(@TypeOf(rect)).Struct.fields) |field| {
-                    if (comptime std.mem.endsWith(u8, field.name, "color"))
-                        @field(rect, field.name) = @splat(1);
-                }
+                rect.top_left_color = @as(vec4, @splat(1));
+                rect.btm_left_color = @as(vec4, @splat(1));
+                rect.top_right_color = @as(vec4, @splat(1));
+                rect.btm_right_color = @as(vec4, @splat(1));
                 rect.edge_softness = 1;
                 rect.border_thickness = 2;
                 rect.corner_radii = [4]f32{ 2, 2, 2, 2 };
@@ -708,7 +708,8 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
         const p = ui.pushLayoutParentF("{s}_slider_{s}", .{ hash, comp }, size, .x);
         defer ui.popParentAssert(p);
         const slider_size = [2]Size{ Size.percent(1, 0), Size.text_dim(1) };
-        ui.slider(comp, slider_size, &color_ptr[idx], 0, 1);
+        const slider_name = ui.fmtTmpString("{s}_comp_{s}", .{ hash, comp });
+        ui.slider(slider_name, slider_size, &color_ptr[idx], 0, 1);
         ui.labelF("{s} {d:1.3}", .{ comp, color_ptr[idx] });
     }
 }

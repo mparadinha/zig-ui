@@ -156,6 +156,7 @@ pub fn deinit(self: *UI) void {
 pub const Flags = packed struct {
     clickable: bool = false,
     selectable: bool = false, // maintains focus when clicked
+    toggleable: bool = false, // like `clickable` but `Signal.toggled` is also used
     scroll_children_x: bool = false,
     scroll_children_y: bool = false,
 
@@ -176,6 +177,7 @@ pub const Flags = packed struct {
     pub fn interactive(self: Flags) bool {
         return self.clickable or
             self.selectable or
+            self.toggleable or
             self.scroll_children_x or
             self.scroll_children_y;
     }
@@ -200,8 +202,8 @@ pub const Node = struct {
     corner_radii: [4]f32, // order is left-to-right, top-to-bottom
     edge_softness: f32,
     border_thickness: f32,
-    pref_size: [2]Size,
-    child_layout_axis: Axis,
+    size: [2]Size,
+    layout_axis: Axis,
     cursor_type: Cursor,
     font_type: FontType,
     font_size: f32,
@@ -209,7 +211,7 @@ pub const Node = struct {
     custom_draw_fn: ?CustomDrawFn,
     custom_draw_ctx_as_bytes: ?[]const u8, // gets copied during `addNode`
     scroll_multiplier: vec2,
-    padding: vec2, // only applies to node with no display_string; padding for those is calculated in `textPadding`
+    padding: vec2, // only applies to node without a `display_string`; padding for those is calculated in `textPadding`
 
     // per-frame additional info
     first_time: bool,
@@ -241,6 +243,7 @@ pub const Node = struct {
     last_click_time: f32, // used for double click checks
     last_double_click_time: f32, // used for triple click checks
     scroll_offset: vec2,
+    toggled: bool, // used for collapsible tree node
 };
 
 pub const CustomDrawFn = *const fn (
@@ -260,8 +263,8 @@ pub const Style = struct {
     corner_radii: [4]f32 = [4]f32{ 0, 0, 0, 0 },
     edge_softness: f32 = 0,
     border_thickness: f32 = 0,
-    pref_size: [2]Size = .{ Size.text_dim(1), Size.text_dim(1) },
-    child_layout_axis: Axis = .y,
+    size: [2]Size = .{ Size.text_dim(1), Size.text_dim(1) },
+    layout_axis: Axis = .y,
     cursor_type: Cursor = .arrow,
     font_type: FontType = .text,
     font_size: f32 = 18,
@@ -481,6 +484,7 @@ pub const Signal = struct {
     // mouse_drag: ?Rect, // relative coordinates, just like `Signal.mouse_pos`
     scroll_amount: vec2, // positive means scrolling up/left
     focused: bool,
+    toggled: bool,
 };
 
 pub fn addNode(self: *UI, flags: Flags, string: []const u8, init_args: anytype) *Node {
@@ -597,13 +601,14 @@ pub fn addNodeRawStrings(self: *UI, flags: Flags, display_string_in: []const u8,
 
     // update cross-frame (persistant) data
     node.last_frame_touched = self.frame_idx;
-    if (!lookup_result.found_existing) {
+    if (node.first_time) {
         node.signal = try self.computeNodeSignal(node);
         node.first_frame_touched = self.frame_idx;
         node.rel_pos = RelativePlacement.match(.btm_left);
         node.last_click_time = 0;
         node.last_double_click_time = 0;
         node.scroll_offset = vec2{ 0, 0 };
+        node.toggled = false;
     }
 
     // user overrides of node data
@@ -700,8 +705,7 @@ pub fn startBuild(
     if (self.root_node) |node| try self.computeSignalsForTree(node);
 
     // clear out the whole arena
-    self.build_arena.deinit();
-    self.build_arena = std.heap.ArenaAllocator.init(self.allocator);
+    _ = self.build_arena.reset(.free_all);
 
     self.node_keys_this_frame.clearRetainingCapacity();
 
@@ -724,7 +728,7 @@ pub fn startBuild(
     try self.style_stack.push(self.base_style);
 
     self.root_node = try self.addNodeRaw(.{ .clip_children = true }, "###INTERNAL_ROOT_NODE", .{
-        .pref_size = Size.exact(.pixels, screen_size[0], screen_size[1]),
+        .size = Size.exact(.pixels, screen_size[0], screen_size[1]),
         .rect = Rect{ .min = vec2{ 0, 0 }, .max = screen_size },
     });
     try self.parent_stack.push(self.root_node.?);
@@ -826,6 +830,7 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
         // .mouse_drag = null,
         .scroll_amount = vec2{ 0, 0 },
         .focused = false,
+        .toggled = false,
     };
 
     if (!node.flags.interactive()) return signal;
@@ -852,7 +857,7 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
 
     signal.hovering = is_hot;
 
-    if (node.flags.clickable) {
+    if (node.flags.clickable or node.flags.toggleable) {
         // begin/end a click if there was a mouse down/up event on this node
         if (is_hot and !active_key_matches and mouse_down_ev != null) {
             signal.pressed = true;
@@ -935,6 +940,12 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
         signal.triple_clicked = true;
     if (signal.clicked) node.last_click_time = cur_time;
     if (signal.double_clicked) node.last_double_click_time = cur_time;
+
+    // update/sync toggle info
+    if (node.flags.toggleable) {
+        if (signal.clicked) node.toggled = !node.toggled;
+        signal.toggled = node.toggled;
+    }
 
     return signal;
 }
@@ -1210,7 +1221,7 @@ fn solveFinalPos(self: *UI, node: *Node) void {
 
 fn solveIndependentSizesWorkFn(self: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
-    switch (node.pref_size[axis_idx]) {
+    switch (node.size[axis_idx]) {
         .pixels => |pixels| node.calc_size[axis_idx] = pixels.value,
         // this is wrong for percent (the correct one is calculated later) but this gives
         // and upper bound on the size, which might be needed for "downward dependent" nodes
@@ -1230,7 +1241,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
     _ = self;
 
     const axis_idx: usize = @intFromEnum(axis);
-    const is_layout_axis = (axis == node.child_layout_axis);
+    const is_layout_axis = (axis == node.layout_axis);
 
     const child_funcs = struct {
         pub fn sumChildrenSizes(parent: *Node, idx: usize) f32 {
@@ -1245,9 +1256,9 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
             var max_so_far: f32 = 0;
             var child = parent.first;
             while (child) |child_node| : (child = child_node.next) {
-                const child_size = switch (child_node.pref_size[idx]) {
+                const child_size = switch (child_node.size[idx]) {
                     .percent => blk: {
-                        if (@intFromEnum(child_node.child_layout_axis) == idx) {
+                        if (@intFromEnum(child_node.layout_axis) == idx) {
                             break :blk sumChildrenSizes(child_node, idx);
                         } else {
                             break :blk sumChildrenSizes(child_node, idx);
@@ -1261,7 +1272,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
         }
     };
 
-    switch (node.pref_size[axis_idx]) {
+    switch (node.size[axis_idx]) {
         .by_children => {
             if (is_layout_axis) {
                 node.calc_size[axis_idx] = child_funcs.sumChildrenSizes(node, axis_idx);
@@ -1276,7 +1287,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
 
 fn solveUpwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
-    switch (node.pref_size[axis_idx]) {
+    switch (node.size[axis_idx]) {
         .percent => |percent| {
             const parent_size = if (node.parent) |p|
                 p.calc_size - p.padding * vec2{ 2, 2 }
@@ -1293,7 +1304,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     if (node.child_count == 0) return;
 
     const axis_idx: usize = @intFromEnum(axis);
-    const is_layout_axis = (axis == node.child_layout_axis);
+    const is_layout_axis = (axis == node.layout_axis);
 
     const available_size = node.calc_size - node.padding * vec2{ 2, 2 };
 
@@ -1311,7 +1322,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
             .y => child_node.flags.floating_y,
         }) continue;
 
-        const strictness = child_node.pref_size[axis_idx].getStrictness();
+        const strictness = child_node.size[axis_idx].getStrictness();
         const child_size = child_node.calc_size[axis_idx];
 
         total_children_size += child_size;
@@ -1347,7 +1358,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     if (overflow > 0) {
         var removed_amount: f32 = 0;
         for (other_children.slice()) |child_node| {
-            const strictness = child_node.pref_size[axis_idx].getStrictness();
+            const strictness = child_node.size[axis_idx].getStrictness();
             if (strictness == 1) continue;
             const child_size = child_node.calc_size[axis_idx];
             const child_take_budget = child_size * strictness;
@@ -1373,7 +1384,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
 
 fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
-    const is_layout_axis = (axis == node.child_layout_axis);
+    const is_layout_axis = (axis == node.layout_axis);
     const is_scrollable_axis = switch (axis) {
         .x => node.flags.scroll_children_x,
         .y => node.flags.scroll_children_y,
@@ -1980,9 +1991,9 @@ pub fn dumpNodeTreeGraph(self: *UI, root: *Node, save_path: []const u8) !void {
     while (node_iter.next()) |node| {
         try writer.print("  Node_0x{x} [label=\"", .{@intFromPtr(node)});
         try writer.print("{s}\n", .{std.fmt.fmtSliceEscapeLower(node.hash_string)});
-        try writer.print("{any}\n", .{node.pref_size});
+        try writer.print("{any}\n", .{node.size});
         try writer.print("{d}\n", .{node.rect});
-        if (node.child_count > 0) try writer.print("child_layout={}\n", .{node.child_layout_axis});
+        if (node.child_count > 0) try writer.print("child_layout={}\n", .{node.layout_axis});
         inline for (@typeInfo(Flags).Struct.fields) |field| {
             if (@field(node.flags, field.name)) _ = try writer.write(field.name ++ ",");
         }
@@ -2102,21 +2113,21 @@ pub const DebugView = struct {
             _ = self.ui.addNode(border_node_flags, "", .{
                 .border_color = vec4{ 1, 0, 0, 0.5 },
                 .rel_pos = RelativePlacement.simple(node.rect.min),
-                .pref_size = Size.fromRect(node.rect),
+                .size = Size.fromRect(node.rect),
             });
         }
         // green border for the node selected from the list (separated so it always draws on top)
         _ = self.ui.addNode(border_node_flags, "", .{
             .border_color = vec4{ 0, 1, 0, 0.5 },
             .rel_pos = RelativePlacement.simple(active_node.rect.min),
-            .pref_size = Size.fromRect(active_node.rect),
+            .size = Size.fromRect(active_node.rect),
         });
         // blue border to show the padding
         if (@reduce(.And, active_node.padding != vec2{ 0, 0 })) {
             _ = self.ui.addNode(border_node_flags, "", .{
                 .border_color = vec4{ 0, 0, 1, 0.5 },
                 .rel_pos = RelativePlacement.simple(active_node.rect.min + active_node.padding),
-                .pref_size = size: {
+                .size = size: {
                     const size = active_node.rect.size() - active_node.padding * vec2{ 2, 2 };
                     break :size Size.exact(.pixels, size[0], size[1]);
                 },
@@ -2126,7 +2137,7 @@ pub const DebugView = struct {
 
         self.ui.pushStyle(.{ .font_size = 16, .bg_color = vec4{ 0, 0, 0, 0.75 } });
         defer _ = self.ui.popStyle();
-        self.ui.root_node.?.child_layout_axis = .x;
+        self.ui.root_node.?.layout_axis = .x;
         if (self.anchor_right) self.ui.spacer(.x, Size.percent(1, 0));
         {
             const left_bg_node = self.ui.addNode(.{
@@ -2134,8 +2145,8 @@ pub const DebugView = struct {
                 .draw_background = true,
                 .clip_children = true,
             }, "", .{
-                .child_layout_axis = .y,
-                .pref_size = [2]Size{ Size.by_children(0.5), Size.by_children(1) },
+                .layout_axis = .y,
+                .size = [2]Size{ Size.by_children(0.5), Size.by_children(1) },
             });
             self.ui.pushParent(left_bg_node);
             defer self.ui.popParentAssert(left_bg_node);
@@ -2156,8 +2167,8 @@ pub const DebugView = struct {
                 .draw_background = true,
                 .clip_children = true,
             }, "", .{
-                .child_layout_axis = .y,
-                .pref_size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+                .layout_axis = .y,
+                .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
             });
             self.ui.pushParent(right_bg_node);
             defer self.ui.popParentAssert(right_bg_node);
@@ -2209,8 +2220,8 @@ pub const DebugView = struct {
                 .draw_background = true,
                 .clip_children = true,
             }, "#help_bg_node", .{
-                .child_layout_axis = .y,
-                .pref_size = [2]Size{ Size.by_children(1), Size.by_children(1) },
+                .layout_axis = .y,
+                .size = [2]Size{ Size.by_children(1), Size.by_children(1) },
             });
             self.ui.pushParent(help_bg_node);
             defer self.ui.popParentAssert(help_bg_node);

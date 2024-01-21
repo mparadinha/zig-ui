@@ -14,13 +14,24 @@ pub fn build(b: *std.build.Builder) void {
     options.addOption([]const u8, "resource_dir", this_dir ++ "/resources");
     const opts_mod = options.createModule();
 
-    _ = b.addModule("zig-ui", .{
+    const zig_ui_mod = b.addModule("zig-ui", .{
         .source_file = .{ .path = "zig_ui.zig" },
         .dependencies = &.{
             .{ .name = "mach-glfw", .module = glfw_mod },
             .{ .name = "build_opts", .module = opts_mod },
         },
     });
+
+    const demo = b.addExecutable(.{
+        .name = "demo",
+        .root_source_file = .{ .path = "demo.zig" },
+    });
+    demo.linkLibC();
+    demo.addModule("zig-ui", zig_ui_mod);
+    link(b, demo);
+    const run_demo = b.addRunArtifact(demo);
+    const run_demo_step = b.step("run-demo", "Run the demo");
+    run_demo_step.dependOn(&run_demo.step);
 }
 
 pub fn link(b: *std.build.Builder, step: *std.Build.CompileStep) void {

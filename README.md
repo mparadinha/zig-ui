@@ -80,4 +80,4 @@ pub fn main() !void {
     }
 }
 ```
-(see `src/widgets.zig` for more information)
+(see `src/widgets.zig` and `demo.zig` for more information)
