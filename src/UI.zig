@@ -526,10 +526,22 @@ pub fn addNodeStringsF(
 }
 
 pub fn addNodeRaw(self: *UI, flags: Flags, string: []const u8, init_args: anytype) !*Node {
+    const display_string = if (flags.ignore_hash_sep) string else displayPartOfString(string);
+    const hash_string = if (flags.ignore_hash_sep) string else hashPartOfString(string);
+    return self.addNodeRawStrings(flags, display_string, hash_string, init_args);
+}
+
+pub fn addNodeRawStrings(
+    self: *UI,
+    flags: Flags,
+    display_str_in: []const u8,
+    hash_str_in: []const u8,
+    init_args: anytype,
+) !*Node {
     const arena = self.build_arena.allocator();
 
-    const display_string = if (flags.ignore_hash_sep) string else displayPartOfString(string);
-    const hash_string = if (flags.no_id) blk: {
+    const display_str = display_str_in;
+    const hash_str = if (flags.no_id) blk: {
         // for `no_id` nodes we use a random number as the hash string, so they don't clobber each other
         break :blk &randomString(&self.prng);
     } else blk: {
@@ -542,26 +554,20 @@ pub fn addNodeRaw(self: *UI, flags: Flags, string: []const u8, init_args: anytyp
                 @panic("at some point the root should have a stable name");
             break :parent_str parent.hash_string;
         };
-        const hash_part = if (flags.ignore_hash_sep) string else hashPartOfString(string);
-        break :blk try std.fmt.allocPrint(arena, "{s}::{s}", .{ parent_hash_str, hash_part });
+        break :blk try std.fmt.allocPrint(arena, "{s}::{s}", .{ parent_hash_str, hash_str_in });
     };
 
-    return self.addNodeRawStrings(flags, display_string, hash_string, init_args);
-}
+    const node_display_str = try arena.dupe(u8, display_str);
+    const node_hash_str = try arena.dupe(u8, hash_str);
 
-pub fn addNodeRawStrings(self: *UI, flags: Flags, display_string_in: []const u8, hash_string_in: []const u8, init_args: anytype) !*Node {
-    const arena = self.build_arena.allocator();
-    const display_string = try arena.dupe(u8, display_string_in);
-    const hash_string = try arena.dupe(u8, hash_string_in);
-
-    const node_key = self.node_table.ctx.hash(hash_string);
+    const node_key = self.node_table.ctx.hash(node_hash_str);
     if (std.mem.indexOfScalar(NodeKey, self.node_keys_this_frame.items, node_key)) |_| {
-        std.debug.panic("hash_string='{s}' has collision\n", .{hash_string});
+        std.debug.panic("hash_string='{s}' has collision\n", .{node_hash_str});
     } else try self.node_keys_this_frame.append(node_key);
 
     // if a node already exists that matches this one we just use that one
     // this way the persistant cross-frame data is possible
-    const lookup_result = try self.node_table.getOrPut(hash_string);
+    const lookup_result = try self.node_table.getOrPut(node_hash_str);
     var node = lookup_result.value_ptr;
 
     // link node into the tree
@@ -585,8 +591,8 @@ pub fn addNodeRawStrings(self: *UI, flags: Flags, display_string_in: []const u8,
     if (flags.interactive() and flags.no_id)
         std.debug.panic("conflicting flags: `no_id` nodes can't be interacted with:\n{}\n", .{flags});
     node.flags = flags;
-    node.display_string = display_string;
-    node.hash_string = hash_string;
+    node.display_string = node_display_str;
+    node.hash_string = node_hash_str;
     const style = self.style_stack.top().?;
     inline for (@typeInfo(Style).Struct.fields) |field_type_info| {
         const field_name = field_type_info.name;
@@ -621,7 +627,7 @@ pub fn addNodeRawStrings(self: *UI, flags: Flags, display_string_in: []const u8,
     }
 
     // for large inputs calculating the text size is too expensive to do multiple times per frame
-    node.text_rect = try self.calcTextRect(node, display_string);
+    node.text_rect = try self.calcTextRect(node, node_display_str);
 
     // save the custom draw context if needed
     if (node.custom_draw_ctx_as_bytes) |ctx_bytes|

@@ -20,6 +20,7 @@ pub fn main() !void {
     defer ui.deinit();
     // just an example. we can change these style variables at anytime
     ui.base_style.text_color = vec4{ 1, 1, 1, 1 };
+    ui.base_style.border_thickness = 2;
 
     var demo = DemoState{};
 
@@ -47,13 +48,13 @@ pub fn main() !void {
 }
 
 const DemoState = struct {
-    clear_color: vec4 = vec4{ 0, 0, 0, 1 },
-    demo_window_bg_color: vec4 = vec4{ 0, 0, 0, 0 },
+    clear_color: vec4 = vec4{ 0, 0, 0, 0.8 },
+    demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
     debug_stats: bool = true,
 };
 
 fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
-    const p = ui.addNode(.{
+    const demo_p = ui.addNode(.{
         .draw_background = true,
         .scroll_children_y = true,
     }, "demo_window", .{
@@ -61,33 +62,26 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
         .size = UI.Size.exact(.percent, 1, 1),
         .layout_axis = .y,
     });
-    ui.pushParent(p);
-    defer ui.popParentAssert(p);
+    ui.pushParent(demo_p);
+    defer ui.popParentAssert(demo_p);
 
     const use_child_size = Size.fillByChildren(1, 1);
 
-    const pickers = ui.addNode(.{ .draw_text = true, .toggleable = true }, "Color pickers:", .{});
-    if (pickers.first_time) pickers.toggled = true;
-    if (pickers.signal.toggled) {
-        const flags = UI.Flags{ .no_id = true };
-        const sides = ui.addNode(flags, "", .{ .size = use_child_size, .layout_axis = .x });
-        ui.pushParent(sides);
+    if (ui.toggleButton("Color pickers:", true).toggled) {
+        const sides = ui.pushLayoutParent(.{ .no_id = true, .draw_border = true }, "", use_child_size, .x);
         defer ui.popParentAssert(sides);
-
-        const left = ui.addNode(flags, "", .{ .size = use_child_size });
         {
-            ui.pushParent(left);
-            defer ui.popParentAssert(left);
-            ui.label("screen clear color");
-            ui.colorPicker("clear color", &state.clear_color);
+            const p = ui.pushLayoutParent(.{ .no_id = true }, "", use_child_size, .y);
+            defer ui.popParentAssert(p);
+            ui.label("demo background color");
+            ui.colorPicker("demo bg color", &state.demo_window_bg_color);
         }
         ui.spacer(.x, Size.pixels(10, 1));
-        const right = ui.addNode(flags, "", .{ .size = use_child_size });
         {
-            ui.pushParent(right);
-            defer ui.popParentAssert(right);
-            ui.label("demo window background color");
-            ui.colorPicker("demo bg color", &state.demo_window_bg_color);
+            const p = ui.pushLayoutParent(.{ .no_id = true }, "", use_child_size, .y);
+            defer ui.popParentAssert(p);
+            ui.label("screen clear color");
+            ui.colorPicker("clear color", &state.clear_color);
         }
     }
 

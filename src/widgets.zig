@@ -28,56 +28,56 @@ pub fn spacer(ui: *UI, axis: Axis, size: Size) void {
     _ = ui.addNode(.{ .no_id = true }, "", .{ .size = sizes });
 }
 
-pub fn label(ui: *UI, string: []const u8) void {
+pub fn label(ui: *UI, str: []const u8) void {
     _ = ui.addNode(.{
         .no_id = true,
         .ignore_hash_sep = true,
         .draw_text = true,
-    }, string, .{});
+    }, str, .{});
 }
 
-pub fn labelBox(ui: *UI, string: []const u8) void {
+pub fn labelBox(ui: *UI, str: []const u8) void {
     _ = ui.addNode(.{
         .no_id = true,
         .ignore_hash_sep = true,
         .draw_text = true,
         .draw_background = true,
         .draw_border = true,
-    }, string, .{});
+    }, str, .{});
 }
 
 pub fn scrollableLabel(
     ui: *UI,
     hash: []const u8,
     size: [2]Size,
-    string: []const u8,
+    str: []const u8,
 ) void {
-    const p = ui.pushLayoutParentFlags(.{
+    const p = ui.pushLayoutParent(.{
         .clip_children = true,
         .scroll_children_x = true,
         .scroll_children_y = true,
     }, hash, size, .y);
     defer ui.popParentAssert(p);
-    ui.label(string);
+    ui.label(str);
 }
 
-pub fn text(ui: *UI, string: []const u8) Signal {
+pub fn text(ui: *UI, str: []const u8) Signal {
     const node = ui.addNode(.{
         .draw_text = true,
-    }, string, .{});
+    }, str, .{});
     return node.signal;
 }
 
-pub fn textBox(ui: *UI, string: []const u8) Signal {
+pub fn textBox(ui: *UI, str: []const u8) Signal {
     const node = ui.addNode(.{
         .draw_text = true,
         .draw_border = true,
         .draw_background = true,
-    }, string, .{});
+    }, str, .{});
     return node.signal;
 }
 
-pub fn button(ui: *UI, string: []const u8) Signal {
+pub fn button(ui: *UI, str: []const u8) Signal {
     const node = ui.addNode(.{
         .clickable = true,
         .draw_text = true,
@@ -85,13 +85,23 @@ pub fn button(ui: *UI, string: []const u8) Signal {
         .draw_background = true,
         .draw_hot_effects = true,
         .draw_active_effects = true,
-    }, string, .{
+    }, str, .{
         .cursor_type = .pointing_hand,
     });
     return node.signal;
 }
 
-pub fn iconButton(ui: *UI, string: []const u8) Signal {
+pub fn iconLabel(ui: *UI, str: []const u8) void {
+    _ = ui.addNode(.{
+        .no_id = true,
+        .ignore_hash_sep = true,
+        .draw_text = true,
+    }, str, .{
+        .font_type = .icon,
+    });
+}
+
+pub fn iconButton(ui: *UI, str: []const u8) Signal {
     const node = ui.addNode(.{
         .clickable = true,
         .draw_text = true,
@@ -99,19 +109,19 @@ pub fn iconButton(ui: *UI, string: []const u8) Signal {
         .draw_background = true,
         .draw_hot_effects = true,
         .draw_active_effects = true,
-    }, string, .{
+    }, str, .{
         .cursor_type = .pointing_hand,
         .font_type = .icon,
     });
     return node.signal;
 }
 
-pub fn subtleIconButton(ui: *UI, string: []const u8) Signal {
+pub fn subtleIconButton(ui: *UI, str: []const u8) Signal {
     const node = ui.addNode(.{
         .clickable = true,
         .draw_text = true,
         .draw_active_effects = true,
-    }, string, .{
+    }, str, .{
         .cursor_type = .pointing_hand,
         .font_type = .icon,
     });
@@ -127,7 +137,7 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
 
     const style = ui.topStyle();
 
-    const scroll_zone = ui.pushLayoutParentFlagsF(.{
+    const scroll_zone = ui.pushLayoutParentF(.{
         .clickable = true,
     }, "{s}_slider", .{name}, size, .x);
     defer ui.popParentAssert(scroll_zone);
@@ -180,32 +190,38 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
     value_ptr.* = clamp(value_ptr.*, min, max);
 }
 
-pub fn checkBox(ui: *UI, string: []const u8, value: *bool) Signal {
-    const parent_size = [2]Size{ Size.children(1), Size.children(1) };
-    const layout_parent = ui.pushLayoutParentF("{s}_layout_parent", .{string}, parent_size, .x);
-    layout_parent.flags.draw_background = true;
-    defer ui.popParentAssert(layout_parent);
+pub fn checkBox(ui: *UI, str: []const u8, value: *bool) Signal {
+    const p_size = Size.fillByChildren(1, 1);
+    const p = ui.pushLayoutParentF(.{ .draw_background = true }, "{s}_parent", .{str}, p_size, .x);
+    defer ui.popParentAssert(p);
 
     const box_icon = if (value.*) Icons.ok else " ";
-    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ box_icon, string });
+    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ box_icon, str });
     if (box_signal.clicked) value.* = !value.*;
 
-    ui.label(string);
+    ui.label(str);
 
     return box_signal;
 }
 
-/// pushes a new node as parent that is meant only for layout purposes
-pub fn pushLayoutParent(
-    ui: *UI,
-    hash: []const u8,
-    size: [2]Size,
-    layout_axis: Axis,
-) *Node {
-    return ui.pushLayoutParentFlags(.{}, hash, size, layout_axis);
+pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
+    const click_region = ui.pushLayoutParentF(.{
+        .toggleable = true,
+    }, "{s}_click_region", .{str}, Size.fillByChildren(1, 1), .x);
+    defer ui.popParentAssert(click_region);
+    click_region.cursor_type = .pointing_hand;
+    if (click_region.first_time) click_region.toggled = start_open;
+    const signal = click_region.signal;
+
+    const arrow = if (signal.toggled) Icons.down_open else Icons.right_open;
+    ui.iconLabel(arrow);
+    ui.label(str);
+
+    return signal;
 }
 
-pub fn pushLayoutParentFlags(
+/// pushes a new node as parent that is meant only for layout purposes
+pub fn pushLayoutParent(
     ui: *UI,
     flags: UI.Flags,
     hash: []const u8,
@@ -574,7 +590,9 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
 }
 
 pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
-    const square_size = 225; // 225/6 = 37.5 which is nice to avoid gaps in the hue bar nodes
+    const square_px_size = 225; // 225/6 = 37.5 which is nice to avoid gaps in the hue bar nodes
+    const square_size = Size.exact(.pixels, square_px_size, square_px_size);
+    const hue_bar_size = Size.exact(.pixels, square_px_size / 10, square_px_size);
 
     var hsv = RGBtoHSV(color.*);
 
@@ -591,7 +609,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     defer ui.popParentAssert(background_node);
 
     const color_square = ui.addNodeF(.{ .clickable = true }, "{s}_square", .{hash}, .{
-        .size = Size.exact(.pixels, square_size, square_size),
+        .size = square_size,
         .custom_draw_fn = (struct {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 const hue = @as(*align(1) const vec4, @ptrCast(node.custom_draw_ctx_as_bytes.?.ptr)).*;
@@ -637,7 +655,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     ui.spacer(.x, Size.pixels(3, 1));
 
     const hue_bar = ui.addNodeF(.{ .clickable = true, .draw_background = true }, "{s}_hue_bar", .{hash}, .{
-        .size = Size.exact(.pixels, square_size / 10, square_size),
+        .size = hue_bar_size,
         .custom_draw_fn = (struct {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 var rect = UI.ShaderInput.fromNode(node);
@@ -699,13 +717,13 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
 
     // TODO: allow switching between representations for the sliders (RGBA, HSVA, OKLAB)
 
-    const value_parent = ui.pushLayoutParentF("{s}_values_parent", .{hash}, Size.exact(.pixels, square_size, square_size), .y);
+    const value_parent = ui.pushLayoutParentF(.{}, "{s}_values_parent", .{hash}, square_size, .y);
     defer ui.popParentAssert(value_parent);
     const components = [_][]const u8{ "R", "G", "B", "A" };
     const color_ptr = color;
     for (components, 0..) |comp, idx| {
         const size = [2]Size{ Size.percent(1, 0), Size.children(0) };
-        const p = ui.pushLayoutParentF("{s}_slider_{s}", .{ hash, comp }, size, .x);
+        const p = ui.pushLayoutParentF(.{}, "{s}_slider_{s}", .{ hash, comp }, size, .x);
         defer ui.popParentAssert(p);
         const slider_size = [2]Size{ Size.percent(1, 0), Size.text(1) };
         const slider_name = ui.fmtTmpString("{s}_comp_{s}", .{ hash, comp });
@@ -803,12 +821,7 @@ pub fn checkBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, value: *bool)
     return ui.checkBox(str, value);
 }
 
-pub fn pushLayoutParentF(ui: *UI, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
+pub fn pushLayoutParentF(ui: *UI, flags: UI.Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
     const str = ui.fmtTmpString(fmt, args);
-    return ui.pushLayoutParent(str, size, layout_axis);
-}
-
-pub fn pushLayoutParentFlagsF(ui: *UI, flags: UI.Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
-    const str = ui.fmtTmpString(fmt, args);
-    return ui.pushLayoutParentFlags(flags, str, size, layout_axis);
+    return ui.pushLayoutParent(flags, str, size, layout_axis);
 }

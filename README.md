@@ -1,4 +1,4 @@
-# An immediate mode style GUI, writen fully in zig
+# An immediate mode style GUI
 **Heavily** inspired by
 [Dear ImGui](https://github.com/ocornut/imgui),
 [Ryan Fleury's UI series](https://www.rfleury.com/p/ui-series-table-of-contents),
