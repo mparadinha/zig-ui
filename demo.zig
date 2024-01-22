@@ -48,9 +48,10 @@ pub fn main() !void {
 }
 
 const DemoState = struct {
-    clear_color: vec4 = vec4{ 0, 0, 0, 0.8 },
+    clear_color: vec4 = vec4{ 0, 0, 0, 0.9 },
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
     debug_stats: bool = true,
+    listbox_idx: usize = 0,
 };
 
 fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
@@ -86,6 +87,11 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
     }
 
     _ = ui.checkBox("Toggle debug stats in the corner", &state.debug_stats);
+
+    const choices = [_][]const u8{ "Choice A", "Choice B", "Choice C", "Choice D", "Choice E", "Choice F" };
+    ui.labelF("Current choice: {s}", .{choices[state.listbox_idx]});
+    _ = ui.listBox("listbox_test", .{ Size.children(1), Size.pixels(80, 1) }, &choices, &state.listbox_idx);
+    // ui.dropDownList();
 
     // show at the end, to get more accurate stats for this frame
     if (state.debug_stats) {

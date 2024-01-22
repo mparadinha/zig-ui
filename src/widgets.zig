@@ -220,6 +220,46 @@ pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
     return signal;
 }
 
+pub fn listBox(
+    ui: *UI,
+    hash: []const u8,
+    size: [2]Size,
+    choices: []const []const u8,
+    chosen_idx: *usize,
+) Signal {
+    const scroll_region = ui.pushLayoutParent(.{
+        .clip_children = true,
+        .scroll_children_y = true,
+    }, hash, size, .y);
+    defer ui.popParentAssert(scroll_region);
+
+    for (choices, 0..) |str, idx| {
+        if (ui.button(str).pressed) chosen_idx.* = idx;
+    }
+
+    // TODO: scroll bar
+
+    // TODO: return correct click signals
+    return scroll_region.signal;
+}
+
+pub fn dropDownList(
+    ui: *UI,
+    hash: []const u8,
+    size: [2]Size,
+    choices: []const []const u8,
+    chosen_idx: *usize,
+) Signal {
+    _ = chosen_idx;
+    _ = choices;
+    _ = size;
+    _ = hash;
+    _ = ui;
+
+    // TODO: button(current choice displayed + down-arrow)
+    // TODO: new window with a listbox inside
+}
+
 /// pushes a new node as parent that is meant only for layout purposes
 pub fn pushLayoutParent(
     ui: *UI,
@@ -379,49 +419,6 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
     }
 
     ui.popParentAssert(parent);
-}
-
-// TODO
-pub fn dropDownList(ui: *UI, hash: []const u8, options: []const []const u8, chosen_idx: *usize, is_open: *bool) void {
-    const choice_parent_size = [2]Size{ Size.children(1), Size.text(1) };
-    const choice_parent = ui.addNodeF(.{}, "###{s}:choice_parent", .{hash}, .{ .size = choice_parent_size, .layout_axis = .x });
-    ui.pushParent(choice_parent);
-    {
-        ui.label(options[chosen_idx.*]);
-        const open_btn_sig = ui.iconButton(if (is_open.*) Icons.up_open else Icons.down_open);
-        if (open_btn_sig.clicked) is_open.* = !is_open.*;
-    }
-    std.debug.assert(ui.popParent() == choice_parent);
-
-    if (is_open.*) {
-        const opts_window = ui.startWindow("tmp_opts_window");
-        defer ui.endWindow(opts_window);
-
-        const opts_parent_size = [2]Size{ Size.pixels(choice_parent.rect.size()[0], 1), Size.children(1) };
-        const opts_parent = ui.addNode(.{
-            .clip_children = true,
-            .draw_background = true,
-            .floating_x = true,
-            .floating_y = true,
-        }, "tmp_opts_window_parent", .{
-            .size = opts_parent_size,
-            .rel_pos = .{ .target = .top_left, .anchor = .btm_left, .diff = choice_parent.rect.min },
-        });
-        ui.pushParent(opts_parent);
-        defer std.debug.assert(ui.popParent() == opts_parent);
-
-        for (options, 0..) |option, idx| {
-            const opt_node = ui.addNodeStringsF(.{
-                .clickable = true,
-                .draw_border = true,
-                .draw_text = true,
-                .draw_hot_effects = true,
-                .draw_active_effects = true,
-            }, "{s}", .{option}, "{s}:opt_node_#{}", .{ hash, idx }, .{});
-            opt_node.size = [2]Size{ Size.percent(1, 0), Size.text(1) };
-            if (opt_node.signal.clicked) chosen_idx.* = idx;
-        }
-    }
 }
 
 pub fn textInput(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) Signal {
