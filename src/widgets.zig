@@ -250,14 +250,31 @@ pub fn dropDownList(
     choices: []const []const u8,
     chosen_idx: *usize,
 ) Signal {
-    _ = chosen_idx;
-    _ = choices;
-    _ = size;
-    _ = hash;
-    _ = ui;
-
     // TODO: button(current choice displayed + down-arrow)
+    const click_region = ui.pushLayoutParentF(.{
+        .toggleable = true,
+    }, "{s}_btn", .{hash}, Size.fillByChildren(1, 1), .x);
+    {
+        ui.label(choices[chosen_idx.*]);
+        ui.iconLabel(Icons.down_open);
+    }
+    ui.popParentAssert(click_region);
+
     // TODO: new window with a listbox inside
+    if (click_region.signal.toggled) {
+        // const window_pos = RelativePlacement.simple(click_region.rect.min);
+        const window_pos = RelativePlacement{
+            .target = .top_right,
+            .anchor = .btm_left,
+            .diff = click_region.rect.get(.btm_right),
+        };
+        const list_window = ui.startWindow(hash, size, window_pos);
+        defer ui.endWindow(list_window);
+        _ = ui.listBox(hash, size, choices, chosen_idx);
+    }
+
+    // TODO: combine click+listbox signals
+    return click_region.signal;
 }
 
 /// pushes a new node as parent that is meant only for layout purposes

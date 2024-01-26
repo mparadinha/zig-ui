@@ -91,7 +91,8 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
     const choices = [_][]const u8{ "Choice A", "Choice B", "Choice C", "Choice D", "Choice E", "Choice F" };
     ui.labelF("Current choice: {s}", .{choices[state.listbox_idx]});
     _ = ui.listBox("listbox_test", .{ Size.children(1), Size.pixels(80, 1) }, &choices, &state.listbox_idx);
-    // ui.dropDownList();
+    ui.label("Drop down list:");
+    _ = ui.dropDownList("dropdownlist_test", .{ Size.children(1), Size.pixels(80, 1) }, &choices, &state.listbox_idx);
 
     // show at the end, to get more accurate stats for this frame
     if (state.debug_stats) {
