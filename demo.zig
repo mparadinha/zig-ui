@@ -36,7 +36,7 @@ pub fn main() !void {
         const mouse_pos = window.getMousePos();
 
         try ui.startBuild(width, height, mouse_pos, &window.event_queue, &window);
-        try showDemo(allocator, &ui, &demo);
+        try showDemo(allocator, &ui, dt, &demo);
         ui.endBuild(dt);
 
         window.clear(demo.clear_color);
@@ -54,7 +54,12 @@ const DemoState = struct {
     listbox_idx: usize = 0,
 };
 
-fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
+fn showDemo(
+    _: std.mem.Allocator,
+    ui: *UI,
+    dt: f32,
+    state: *DemoState,
+) !void {
     const demo_p = ui.addNode(.{
         .draw_background = true,
         .scroll_children_y = true,
@@ -104,6 +109,7 @@ fn showDemo(_: std.mem.Allocator, ui: *UI, state: *DemoState) !void {
         defer ui.endWindow(stats_window);
         ui.labelF("mouse_pos={d}", .{ui.mouse_pos});
         ui.labelF("frame_idx={d}", .{ui.frame_idx});
+        ui.labelF("{d:4.2} fps", .{1 / dt});
         ui.labelF("# of nodes: {}", .{ui.node_table.key_mappings.items.len});
         ui.labelF("build_arena capacity: {:.2}", .{
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),

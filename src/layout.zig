@@ -126,11 +126,11 @@ fn solveUpwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
 }
 
 fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
-    _ = self;
     if (node.child_count == 0) return;
 
     const axis_idx: usize = @intFromEnum(axis);
     const is_layout_axis = (axis == node.layout_axis);
+    const arena = self.build_arena.allocator();
 
     const available_size = node.calc_size - node.padding * vec2{ 2, 2 };
 
@@ -139,8 +139,10 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     var max_child_size: f32 = 0;
     var zero_strict_take_budget: f32 = 0;
     var other_children_leeway: f32 = 0;
-    var zero_strict_children = std.BoundedArray(*Node, 1000).init(0) catch unreachable;
-    var other_children = std.BoundedArray(*Node, 1000).init(0) catch unreachable;
+    var zero_strict_children = std.ArrayList(*Node).initCapacity(arena, node.child_count) catch
+        @panic("too many children");
+    var other_children = std.ArrayList(*Node).initCapacity(arena, node.child_count) catch
+        @panic("too many children");
     var child = node.first;
     while (child) |child_node| : (child = child_node.next) {
         if (switch (axis) {
@@ -168,7 +170,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     // shrink zero strictness children as much as we can (to 0 size if needed) before
     // trying to shrink other children with strictness > 0
     const zero_strict_remove_amount = @min(overflow, zero_strict_take_budget);
-    for (zero_strict_children.slice()) |z_child| {
+    for (zero_strict_children.items) |z_child| {
         if (is_layout_axis) {
             const z_child_percent = z_child.calc_size[axis_idx] / zero_strict_take_budget;
             z_child.calc_size[axis_idx] -= zero_strict_remove_amount * z_child_percent;
@@ -183,7 +185,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     // (proportionally to their strictness values, i.e least strict shrinks the most)
     if (overflow > 0) {
         var removed_amount: f32 = 0;
-        for (other_children.slice()) |child_node| {
+        for (other_children.items) |child_node| {
             const strictness = child_node.size[axis_idx].getStrictness();
             if (strictness == 1) continue;
             const child_size = child_node.calc_size[axis_idx];
