@@ -376,6 +376,13 @@ pub const Rect = struct {
         return (Placement{ .btm_left = self.min }).convertTo(place, self.size()).value();
     }
 
+    pub fn intersection(self: Rect, other: Rect) Rect {
+        const highest_min = @max(self.min, other.min);
+        const lowest_max = @min(self.max, other.max);
+        if (@reduce(.Or, lowest_max < highest_min)) return .{ .min = @splat(0), .max = @splat(0) };
+        return .{ .min = highest_min, .max = lowest_max };
+    }
+
     pub fn format(v: Rect, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{{ .min={d:.2}, .max={d:.2} }}", .{ v.min, v.max });
     }
@@ -836,7 +843,8 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
 
     if (!node.flags.interactive()) return signal;
 
-    const mouse_is_over = node.rect.contains(self.mouse_pos);
+    const clipped_rect = Rect.intersection(node.clip_rect, node.rect);
+    const mouse_is_over = clipped_rect.contains(self.mouse_pos);
     const node_key = self.keyFromNode(node);
 
     const hot_key_matches = if (self.hot_node_key) |key| key == node_key else false;
