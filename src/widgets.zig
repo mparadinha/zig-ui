@@ -91,6 +91,17 @@ pub fn button(ui: *UI, str: []const u8) Signal {
     return node.signal;
 }
 
+pub fn subtleButton(ui: *UI, str: []const u8) Signal {
+    const node = ui.addNode(.{
+        .clickable = true,
+        .draw_text = true,
+        .draw_active_effects = true,
+    }, str, .{
+        .cursor_type = .pointing_hand,
+    });
+    return node.signal;
+}
+
 pub fn iconLabel(ui: *UI, str: []const u8) void {
     _ = ui.addNode(.{
         .no_id = true,
@@ -810,6 +821,11 @@ pub fn labelBoxF(ui: *UI, comptime fmt: []const u8, args: anytype) void {
     ui.labelBox(str);
 }
 
+pub fn scrollableLabelF(ui: *UI, hash: []const u8, size: [2]Size, comptime fmt: []const u8, args: anytype) void {
+    const str = ui.fmtTmpString(fmt, args);
+    ui.scrollableLabel(hash, size, str);
+}
+
 pub fn textF(ui: *UI, comptime fmt: []const u8, args: anytype) Signal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.text(str);
@@ -825,6 +841,16 @@ pub fn buttonF(ui: *UI, comptime fmt: []const u8, args: anytype) Signal {
     return ui.button(str);
 }
 
+pub fn subtleButtonF(ui: *UI, comptime fmt: []const u8, args: anytype) Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.subtleButton(str);
+}
+
+pub fn iconLabelF(ui: *UI, comptime fmt: []const u8, args: anytype) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.iconLabel(str);
+}
+
 pub fn iconButtonF(ui: *UI, comptime fmt: []const u8, args: anytype) Signal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.iconButton(str);
@@ -838,6 +864,11 @@ pub fn subtleIconButtonF(ui: *UI, comptime fmt: []const u8, args: anytype) Signa
 pub fn checkBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, value: *bool) Signal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.checkBox(str, value);
+}
+
+pub fn toggleButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, start_open: bool) Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.toggleButton(str, start_open);
 }
 
 pub fn pushLayoutParentF(ui: *UI, flags: UI.Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
