@@ -99,6 +99,21 @@ fn showDemo(
     ui.label("Drop down list:");
     _ = ui.dropDownList("dropdownlist_test", .{ Size.children(1), Size.pixels(80, 1) }, &choices, &state.listbox_idx);
 
+    if (ui.text("Some text with a tooltip").hovering) {
+        ui.startTooltip(null);
+        ui.label("Tooltip text");
+        ui.endTooltip();
+    }
+
+    ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
+
+    if (ui.button("Dump root node tree to `ui_main_tree.dot`").clicked) {
+        const path = "ui_main_tree.dot";
+        const dump_file = try std.fs.cwd().createFile(path, .{});
+        defer dump_file.close();
+        try ui.dumpNodeTreeGraph(ui.root_node.?, dump_file);
+    }
+
     // show at the end, to get more accurate stats for this frame
     if (state.debug_stats) {
         const stats_window = ui.startWindow(
@@ -114,14 +129,5 @@ fn showDemo(
         ui.labelF("build_arena capacity: {:.2}", .{
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
         });
-    }
-
-    ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
-
-    if (ui.button("Dump root node tree to `ui_main_tree.dot`").clicked) {
-        const path = "ui_main_tree.dot";
-        const dump_file = try std.fs.cwd().createFile(path, .{});
-        defer dump_file.close();
-        try ui.dumpNodeTreeGraph(ui.root_node.?, dump_file);
     }
 }

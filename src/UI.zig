@@ -841,8 +841,6 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
         .toggled = false,
     };
 
-    if (!node.flags.interactive()) return signal;
-
     const clipped_rect = Rect.intersection(node.clip_rect, node.rect);
     const mouse_is_over = clipped_rect.contains(self.mouse_pos);
     const node_key = self.keyFromNode(node);
@@ -851,9 +849,10 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     const active_key_matches = if (self.active_node_key) |key| key == node_key else false;
     const focused_key_matches = if (self.focused_node_key) |key| key == node_key else false;
 
-    var is_hot = mouse_is_over;
-    var is_active = active_key_matches;
-    var is_focused = focused_key_matches;
+    const is_interactive = node.flags.interactive();
+    var is_hot = mouse_is_over and is_interactive;
+    var is_active = active_key_matches and is_interactive;
+    var is_focused = focused_key_matches and is_interactive;
 
     const mouse_down_ev = self.events.match(.MouseDown, .{ .button = .left });
     var used_mouse_down_ev = false;
@@ -864,7 +863,7 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     const enter_up_ev = self.events.match(.KeyUp, .{ .key = .enter });
     var used_enter_up_ev = false;
 
-    signal.hovering = is_hot;
+    signal.hovering = mouse_is_over;
 
     if (node.flags.clickable or node.flags.toggleable) {
         // begin/end a click if there was a mouse down/up event on this node

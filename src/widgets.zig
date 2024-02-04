@@ -319,6 +319,11 @@ pub fn endCtxMenu(ui: *UI) void {
 }
 
 pub fn startTooltip(ui: *UI, pos: ?RelativePlacement) void {
+    // TODO: the cursor hot-stop (i.e. the true cursor position)
+    // is only on the top-left of the cursor image for the default
+    // arrow cursor. is there no way to get the cursor size from glfw?
+    const cursor_btm_right = ui.mouse_pos + vec2{ 16, -16 };
+    const default_pos = RelativePlacement.absolute(.{ .top_left = cursor_btm_right });
     const root = ui.addNodeAsRoot(.{
         .clip_children = true,
         .draw_border = true,
@@ -329,7 +334,7 @@ pub fn startTooltip(ui: *UI, pos: ?RelativePlacement) void {
         .size = [2]Size{ Size.children(1), Size.children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
-        .rel_pos = pos orelse RelativePlacement.absolute(.{ .top_left = ui.mouse_pos }),
+        .rel_pos = pos orelse default_pos,
     });
     ui.pushParent(root);
     ui.tooltip_root_node = root;
