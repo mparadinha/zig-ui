@@ -105,6 +105,15 @@ fn showDemo(
         ui.endTooltip();
     }
 
+    {
+        ui.startLine();
+        defer ui.endLine();
+        ui.label("Multiple widgets on a single line:");
+        _ = ui.button("A useless button");
+        ui.iconLabel(UI.Icons.cog);
+        _ = ui.button("Another button");
+    }
+
     ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
 
     if (ui.button("Dump root node tree to `ui_main_tree.dot`").clicked) {

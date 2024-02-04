@@ -304,6 +304,15 @@ pub fn pushLayoutParent(
     return node;
 }
 
+pub fn startLine(ui: *UI) void {
+    const size = UI.Size.fillByChildren(0, 1);
+    _ = ui.pushLayoutParent(.{ .no_id = true }, "", size, .x);
+}
+
+pub fn endLine(ui: *UI) void {
+    _ = ui.popParent();
+}
+
 pub fn startCtxMenu(ui: *UI, pos: ?RelativePlacement) void {
     const root = ui.addNodeAsRoot(.{
         .clip_children = true,
