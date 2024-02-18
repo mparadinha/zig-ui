@@ -6,6 +6,9 @@ const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
 const UI = zig_ui.UI;
 const Size = UI.Size;
+const tracy = zig_ui.tracy;
+
+pub const tracy_enabled = true;
 
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
@@ -35,15 +38,18 @@ pub fn main() !void {
         last_time = cur_time;
         const mouse_pos = window.getMousePos();
 
+        const zone = tracy.ZoneN(@src(), "Demo UI building");
         try ui.startBuild(width, height, mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, dt, &demo);
         ui.endBuild(dt);
+        zone.End();
 
         window.clear(demo.clear_color);
         // do whatever other rendering you want here
         try ui.render();
 
         window.update();
+        tracy.FrameMark();
     }
 }
 
@@ -60,6 +66,9 @@ fn showDemo(
     dt: f32,
     state: *DemoState,
 ) !void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const demo_p = ui.addNode(.{
         .draw_background = true,
         .scroll_children_y = true,

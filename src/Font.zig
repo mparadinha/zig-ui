@@ -4,6 +4,7 @@ const zig_ui = @import("../zig_ui.zig");
 const gl = zig_ui.gl;
 const vec2 = zig_ui.vec2;
 const gfx = @import("graphics.zig");
+const tracy = zig_ui.tracy;
 const c = @cImport({
     @cInclude("stb_rect_pack.h");
     @cInclude("stb_truetype.h");
@@ -119,6 +120,9 @@ fn buildTextAt(
     .rect => Rect,
     .quad => []Quad,
 } {
+    const zone = tracy.ZoneN(@src(), "buildTextAt." ++ @tagName(mode));
+    defer zone.End();
+
     const char_map = try self.getSizedCharMap(pixel_size);
     const metrics = char_map.metrics;
     const scale = char_map.scale;
@@ -132,6 +136,8 @@ fn buildTextAt(
     var max_x: f32 = 0;
 
     if (mode == .rect) {
+        const utf8_zone = tracy.ZoneN(@src(), "utf8Validate");
+        defer utf8_zone.End();
         std.debug.assert(utf8Validate(str));
     }
     var utf8_iter = std.unicode.Utf8View.initUnchecked(str).iterator();
@@ -252,6 +258,9 @@ fn resetPacking(self: *Font) void {
 }
 
 fn packCodepoint(self: *Font, codepoint: u21, size: f32) ?CharData {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     var p: c.stbtt_packedchar = undefined;
     if (c.stbtt_PackFontRange(&self.packing_ctx, self.file_data.ptr, 0, size, @intCast(codepoint), 1, &p) == 0)
         return null;
@@ -297,6 +306,9 @@ pub fn ensureCharData(self: *Font, codepoint: u21, pixel_size: f32) !void {
 }
 
 fn getCharDataFromMap(self: *Font, sized_map: *SizedCharMap, codepoint: u21) !CharData {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     return sized_map.map.get(codepoint) orelse data: {
         const char_data = self.packCodepoint(codepoint, sized_map.pixel_size) orelse {
             // we ran out of space in the texture

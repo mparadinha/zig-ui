@@ -6,8 +6,12 @@ const vec4 = zig_ui.vec4;
 const UI = @import("UI.zig");
 const Node = UI.Node;
 const Axis = UI.Axis;
+const tracy = zig_ui.tracy;
 
 pub fn layoutTree(self: *UI, root: *Node) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     solveIndependentSizes(self, root);
     solveDownwardDependent(self, root);
     solveUpwardDependent(self, root);
@@ -16,36 +20,54 @@ pub fn layoutTree(self: *UI, root: *Node) void {
 }
 
 fn solveIndependentSizes(self: *UI, node: *Node) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const work_fn = solveIndependentSizesWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveDownwardDependent(self: *UI, node: *Node) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const work_fn = solveDownwardDependentWorkFn;
     layoutRecurseHelperPost(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPost(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveUpwardDependent(self: *UI, node: *Node) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const work_fn = solveUpwardDependentWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveViolations(self: *UI, node: *Node) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const work_fn = solveViolationsWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveFinalPos(self: *UI, node: *Node) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const work_fn = solveFinalPosWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveIndependentSizesWorkFn(self: *UI, node: *Node, axis: Axis) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const axis_idx: usize = @intFromEnum(axis);
     switch (node.size[axis_idx]) {
         .pixels => |pixels| node.calc_size[axis_idx] = pixels.value,
@@ -64,6 +86,9 @@ fn solveIndependentSizesWorkFn(self: *UI, node: *Node, axis: Axis) void {
 }
 
 fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     _ = self;
 
     const axis_idx: usize = @intFromEnum(axis);
@@ -112,6 +137,9 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
 }
 
 fn solveUpwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const axis_idx: usize = @intFromEnum(axis);
     switch (node.size[axis_idx]) {
         .percent => |percent| {
@@ -126,6 +154,9 @@ fn solveUpwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
 }
 
 fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     if (node.child_count == 0) return;
 
     const axis_idx: usize = @intFromEnum(axis);
@@ -211,6 +242,9 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
 }
 
 fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const axis_idx: usize = @intFromEnum(axis);
     const is_layout_axis = (axis == node.layout_axis);
     const is_scrollable_axis = switch (axis) {

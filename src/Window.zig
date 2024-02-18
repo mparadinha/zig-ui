@@ -6,6 +6,7 @@ const vec2 = zig_ui.vec2;
 const vec4 = zig_ui.vec4;
 const uvec2 = zig_ui.uvec2;
 const glfw = zig_ui.glfw;
+const tracy = zig_ui.tracy;
 
 const Window = @This();
 
@@ -113,6 +114,9 @@ pub fn clear(self: *Window, color: vec4) void {
 }
 
 pub fn update(self: *Window) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     // discard unprocessed events from the last frame because if they were needed they would've been processed
     self.event_queue.clearRetainingCapacity();
 
