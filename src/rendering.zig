@@ -51,8 +51,10 @@ pub const ShaderInput = extern struct {
 };
 
 pub fn render(self: *UI) !void {
-    var shader_inputs = std.ArrayList(ShaderInput).init(self.allocator);
-    defer shader_inputs.deinit();
+    const arena = self.build_arena.allocator();
+    var estimated_rect_count = self.node_table.count() * 2;
+    for (self.node_table.values()) |node| estimated_rect_count += node.display_string.len;
+    var shader_inputs = try std.ArrayList(ShaderInput).initCapacity(arena, estimated_rect_count);
 
     try setupTreeForRender(self, &shader_inputs, self.root_node.?);
     for (self.window_roots.items) |node| try setupTreeForRender(self, &shader_inputs, node);
