@@ -157,6 +157,12 @@ fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), roo
 fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), node: *Node) !void {
     if (node.custom_draw_fn) |draw_fn| return draw_fn(self, shader_inputs, node);
 
+    // // don't bother adding inputs for fully clipped nodes
+    if (node.parent) |parent| {
+        const clipped_rect = node.rect.intersection(parent.clip_rect);
+        if (@reduce(.Or, clipped_rect.size() == vec2{ 0, 0 })) return;
+    }
+
     const base_rect = ShaderInput.fromNode(node);
 
     // draw background
