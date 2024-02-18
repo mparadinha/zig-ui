@@ -198,7 +198,7 @@ pub const Node = struct {
     // per-frame params
     flags: Flags,
     display_string: []const u8,
-    hash_string: []const u8,
+    key: NodeKey,
     bg_color: vec4,
     border_color: vec4,
     text_color: vec4,
@@ -550,30 +550,26 @@ pub fn addNodeRawStrings(
     const display_str = if (flags.draw_text) display_str_in else &[0]u8{};
     const hash_str = if (flags.no_id) blk: {
         // for `no_id` nodes we use a random number as the hash string, so they don't clobber each other
-        break :blk &randomString(&self.prng);
-    } else blk: {
+        break :blk &randomArray(&self.prng);
+    } else if (self.parent_stack.top()) |stack_top| blk: {
         // to allow for nodes with different parents to have the same name we
         // combine the node's hash string with the hash string of the first parent
         // to have a stable one (i.e. *not* `no-id`).
-        const parent_hash_str = parent_str: {
-            var parent = self.parent_stack.top() orelse break :parent_str "";
-            while (parent.flags.no_id) parent = parent.parent orelse
-                @panic("at some point the root should have a stable name");
-            break :parent_str parent.hash_string;
-        };
-        break :blk try std.fmt.allocPrint(arena, "{s}::{s}", .{ parent_hash_str, hash_str_in });
+        var parent = stack_top;
+        while (parent.flags.no_id) parent = parent.parent orelse
+            @panic("at some point the root should have a stable name");
+        break :blk try std.fmt.allocPrint(arena, "{x:0>16}:{s}", .{ parent.key, hash_str_in });
+    } else blk: {
+        break :blk hash_str_in;
     };
 
-    const node_display_str = try arena.dupe(u8, display_str);
-    const node_hash_str = try arena.dupe(u8, hash_str);
-
-    const node_key = self.node_table.getKeyHash(node_hash_str);
+    const node_key = self.node_table.getKeyHash(hash_str);
     if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_|
-        std.debug.panic("hash_string='{s}' has collision\n", .{node_hash_str});
+        std.debug.panic("hash_string='{s}' has collision\n", .{hash_str});
 
     // if a node already exists that matches this one we just use that one
     // this way the persistant cross-frame data is possible
-    const lookup_result = try self.node_table.getOrPut(node_hash_str);
+    const lookup_result = try self.node_table.getOrPutHash(node_key);
     var node = lookup_result.value_ptr;
 
     // link node into the tree
@@ -597,8 +593,8 @@ pub fn addNodeRawStrings(
     if (flags.interactive() and flags.no_id)
         std.debug.panic("conflicting flags: `no_id` nodes can't be interacted with:\n{}\n", .{flags});
     node.flags = flags;
-    node.display_string = node_display_str;
-    node.hash_string = node_hash_str;
+    node.display_string = try arena.dupe(u8, display_str);
+    node.key = node_key;
     const style = self.style_stack.top().?;
     inline for (@typeInfo(Style).Struct.fields) |field_type_info| {
         const field_name = field_type_info.name;
@@ -633,7 +629,7 @@ pub fn addNodeRawStrings(
     }
 
     // for large inputs calculating the text size is too expensive to do multiple times per frame
-    node.text_rect = try self.calcTextRect(node, node_display_str);
+    node.text_rect = try self.calcTextRect(node, node.display_string);
 
     // save the custom draw context if needed
     if (node.custom_draw_ctx_as_bytes) |ctx_bytes|
@@ -777,7 +773,7 @@ pub fn endBuild(self: *UI, dt: f32) void {
     _ = self.style_stack.pop().?;
     const parent = self.parent_stack.pop().?;
     if (parent != self.root_node.?)
-        std.debug.panic("parent_stack should be empty but '#{s}' was left behind\n", .{parent.hash_string});
+        @panic("only the root node should remain in the parent_stack\n");
 
     std.debug.assert(self.parent_stack.len() == 0);
 
@@ -1132,8 +1128,8 @@ pub fn nodeFromKey(self: UI, key: NodeKey) ?*Node {
     return self.node_table.getFromHash(key);
 }
 
-pub fn keyFromNode(self: UI, node: *Node) NodeKey {
-    return self.node_table.getKeyHash(hashPartOfString(node.hash_string));
+pub fn keyFromNode(_: UI, node: *Node) NodeKey {
+    return node.key;
 }
 
 pub fn displayPartOfString(string: []const u8) []const u8 {
@@ -1257,14 +1253,15 @@ pub const NodeTable = struct {
     pub const GetOrPutResult = struct { found_existing: bool, value_ptr: *V };
 
     pub fn getOrPut(self: *NodeTable, key: K) !GetOrPutResult {
-        const hash = self.getKeyHash(key);
+        return self.getOrPutHash(self.getKeyHash(key));
+    }
 
+    pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GetOrPutResult {
         const gop = try self.ptr_map.getOrPut(hash);
         if (!gop.found_existing) {
             const value_ptr = try self.allocator.create(V);
             gop.value_ptr.* = value_ptr;
         }
-
         return GetOrPutResult{
             .found_existing = gop.found_existing,
             .value_ptr = gop.value_ptr.*,
@@ -1339,10 +1336,8 @@ pub const PRNG = struct {
     }
 };
 
-pub fn randomString(prng: *PRNG) [32]u8 {
-    var buf: [32]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "{x:0>16}{x:0>16}", .{ prng.next(), prng.next() }) catch unreachable;
-    return buf;
+pub fn randomArray(prng: *PRNG) [16]u8 {
+    return @as([8]u8, @bitCast(prng.next())) ++ @as([8]u8, @bitCast(prng.next()));
 }
 
 pub fn dumpNodeTree(self: *UI) void {
@@ -1373,7 +1368,6 @@ pub fn dumpNodeTreeGraph(self: *UI, root: *Node, file: std.fs.File) !void {
     var node_iter = self.node_table.valueIterator();
     while (node_iter.next()) |node| {
         try writer.print("  Node_0x{x} [label=\"", .{@intFromPtr(node)});
-        try writer.print("{s}\n", .{std.fmt.fmtSliceEscapeLower(node.hash_string)});
         try writer.print("{any}\n", .{node.size});
         try writer.print("{d}\n", .{node.rect});
         if (node.child_count > 0) try writer.print("child_layout={}\n", .{node.layout_axis});
