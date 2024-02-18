@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("build_tracy.zig");
 
 pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
@@ -18,7 +19,7 @@ pub fn build(b: *std.build.Builder) void {
         .source_file = .{ .path = "zig_ui.zig" },
         .dependencies = &.{
             .{ .name = "mach-glfw", .module = glfw_mod },
-            .{ .name = "build_opts", .module = opts_mod },
+            .{ .name = "build_options", .module = opts_mod },
         },
     });
 
@@ -29,6 +30,7 @@ pub fn build(b: *std.build.Builder) void {
     demo.linkLibC();
     demo.addModule("zig-ui", zig_ui_mod);
     link(b, demo);
+    _ = tracy.link(b, demo, "tracy-0.10");
     const run_demo = b.addRunArtifact(demo);
     const run_demo_step = b.step("run-demo", "Run the demo");
     run_demo_step.dependOn(&run_demo.step);
