@@ -8,6 +8,7 @@ const Node = UI.Node;
 const Rect = UI.Rect;
 const Font = @import("Font.zig");
 const indexOfNthScalar = UI.indexOfNthScalar;
+const tracy = zig_ui.tracy;
 
 // this struct must have the exact layout expected by the shader
 pub const ShaderInput = extern struct {
@@ -51,16 +52,22 @@ pub const ShaderInput = extern struct {
 };
 
 pub fn render(self: *UI) !void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
+    const inputs_zone = tracy.ZoneN(@src(), "pre-alloc shader_inputs");
     const arena = self.build_arena.allocator();
     var estimated_rect_count = self.node_table.count() * 2;
     for (self.node_table.values()) |node| estimated_rect_count += node.display_string.len;
     var shader_inputs = try std.ArrayList(ShaderInput).initCapacity(arena, estimated_rect_count);
+    inputs_zone.End();
 
     try setupTreeForRender(self, &shader_inputs, self.root.?);
     for (self.window_roots.items) |node| try setupTreeForRender(self, &shader_inputs, node);
     if (self.ctx_menu_root) |node| try setupTreeForRender(self, &shader_inputs, node);
     if (self.tooltip_root) |node| try setupTreeForRender(self, &shader_inputs, node);
 
+    const gl_zone = tracy.ZoneN(@src(), "setup OpenGL buffers and state for drawing");
     // create vertex buffer
     var inputs_vao: u32 = 0;
     gl.genVertexArrays(1, &inputs_vao);
@@ -71,7 +78,14 @@ pub fn render(self: *UI) !void {
     defer gl.deleteBuffers(1, &inputs_vbo);
     gl.bindBuffer(gl.ARRAY_BUFFER, inputs_vbo);
     const stride = @sizeOf(ShaderInput);
+    const buf_zone = tracy.ZoneN(@src(), "glBufferData");
+    buf_zone.Text(try std.fmt.allocPrint(arena, "{} * {} = {}", .{
+        std.fmt.fmtIntSizeBin(stride),
+        shader_inputs.items.len,
+        std.fmt.fmtIntSizeBin(shader_inputs.items.len * stride),
+    }));
     gl.bufferData(gl.ARRAY_BUFFER, @as(isize, @intCast(shader_inputs.items.len * stride)), shader_inputs.items.ptr, gl.STATIC_DRAW);
+    buf_zone.End();
     var field_offset: usize = 0;
     inline for (@typeInfo(ShaderInput).Struct.fields, 0..) |field, i| {
         const elems = switch (@typeInfo(field.type)) {
@@ -143,10 +157,16 @@ pub fn render(self: *UI) !void {
     self.generic_shader.set("icon_atlas", @as(i32, 2));
     self.icon_font.texture.bind(2);
     gl.bindVertexArray(inputs_vao);
+    gl_zone.End();
+    const draw_zone = tracy.ZoneN(@src(), "glDrawArrays");
     gl.drawArrays(gl.POINTS, 0, @intCast(shader_inputs.items.len));
+    draw_zone.End();
 }
 
 fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), root: *Node) !void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     var node_iterator = DepthFirstNodeIterator{ .cur_node = root };
     while (node_iterator.next()) |node| {
         try addShaderInputsForNode(self, shader_inputs, node);
@@ -155,6 +175,13 @@ fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), roo
 
 // turn a UI.Node into Shader quads
 fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), node: *Node) !void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
+    var a_zone: tracy.ZoneCtx = undefined;
+    const a_zone_src = @src();
+    const a_zone_name = "shader_inputs.append";
+
     if (node.custom_draw_fn) |draw_fn| return draw_fn(self, shader_inputs, node);
 
     // // don't bother adding inputs for fully clipped nodes
@@ -173,7 +200,9 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         rect.top_right_color = node.bg_color;
         rect.btm_right_color = node.bg_color;
         rect.border_thickness = 0;
+        a_zone = tracy.ZoneN(a_zone_src, a_zone_name);
         try shader_inputs.append(rect);
+        a_zone.End();
 
         const hot_remove_factor = if (node.flags.draw_active_effects) node.active_trans else 0;
         const effective_hot_trans = node.hot_trans * (1 - hot_remove_factor);
@@ -183,14 +212,18 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             const top_color = vec4{ 1, 1, 1, 0.1 * effective_hot_trans };
             rect.top_left_color = top_color;
             rect.top_right_color = top_color;
+            a_zone = tracy.ZoneN(a_zone_src, a_zone_name);
             try shader_inputs.append(rect);
+            a_zone.End();
         }
         if (node.flags.draw_active_effects) {
             rect = base_rect;
             const btm_color = vec4{ 1, 1, 1, 0.1 * node.active_trans };
             rect.btm_left_color = btm_color;
             rect.btm_right_color = btm_color;
+            a_zone = tracy.ZoneN(a_zone_src, a_zone_name);
             try shader_inputs.append(rect);
+            a_zone.End();
         }
     }
 
@@ -201,7 +234,9 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         rect.btm_left_color = node.border_color;
         rect.top_right_color = node.border_color;
         rect.btm_right_color = node.border_color;
+        a_zone = tracy.ZoneN(a_zone_src, a_zone_name);
         try shader_inputs.append(rect);
+        a_zone.End();
 
         if (node.flags.draw_hot_effects) {
             rect = base_rect;
@@ -211,7 +246,9 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             const btm_color = vec4{ 1, 1, 1, 0.2 * node.hot_trans };
             rect.btm_left_color = btm_color;
             rect.btm_right_color = btm_color;
+            a_zone = tracy.ZoneN(a_zone_src, a_zone_name);
             try shader_inputs.append(rect);
+            a_zone.End();
         }
     }
 
@@ -241,6 +278,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         // of this buffer we can actually recoupe the memory (which is great given
         // that this buffer can become quite large
         defer arena.free(quads);
+        const quad_nodes_zone = tracy.ZoneN(@src(), "for(quads)");
         for (quads) |quad| {
             const quad_rect = Rect{ .min = quad.points[0].pos, .max = quad.points[2].pos };
             var rect = base_rect;
@@ -255,8 +293,12 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             rect.corner_radii = [4]f32{ 0, 0, 0, 0 };
             rect.edge_softness = 0;
             rect.border_thickness = 0;
+            const quad_append_zone = tracy.ZoneN(@src(), "append text quad shader input");
+            if (shader_inputs.items.len == shader_inputs.capacity) tracy.Message("reached shader_input capacity. need to alloc more space");
             try shader_inputs.append(rect);
+            quad_append_zone.End();
         }
+        quad_nodes_zone.End();
     }
 }
 
@@ -289,6 +331,9 @@ pub const DepthFirstNodeIterator = struct {
 };
 
 fn estimateLineCount(node: *Node, font: Font) f32 {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const line_size = font.getScaledMetrics(node.font_size).line_advance;
     const text_size = node.text_rect.size();
     return text_size[1] / line_size;
@@ -298,6 +343,9 @@ fn largeInputOptimizationVisiblePartOfText(self: *UI, node: *Node) struct {
     string: []const u8,
     offset: f32,
 } {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     const font: *Font = switch (node.font_type) {
         .text => &self.font,
         .text_bold => &self.font_bold,

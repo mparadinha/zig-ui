@@ -9,6 +9,7 @@ const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
 const Font = zig_ui.Font;
 const gfx = @import("graphics.zig");
+const tracy = zig_ui.tracy;
 
 const build_opts = @import("build_options");
 
@@ -555,6 +556,9 @@ pub fn addNodeRawStrings(
     hash_str_in: []const u8,
     init_args: anytype,
 ) !*Node {
+    const zone = tracy.ZoneN(@src(), "addNodeRawStrings");
+    defer zone.End();
+
     const arena = self.build_arena.allocator();
 
     const display_str = if (flags.draw_text) display_str_in else &[0]u8{};
@@ -562,6 +566,8 @@ pub fn addNodeRawStrings(
         // for `no_id` nodes we use a random number as the hash string, so they don't clobber each other
         break :blk &randomArray(&self.prng);
     } else if (self.parent_stack.top()) |stack_top| blk: {
+        const walk_zone = tracy.ZoneN(@src(), "walking parents for stable id");
+        defer walk_zone.End();
         // to allow for nodes with different parents to have the same name we
         // combine the node's hash string with the hash string of the first parent
         // to have a stable one (i.e. *not* `no-id`).
@@ -573,15 +579,21 @@ pub fn addNodeRawStrings(
         break :blk hash_str_in;
     };
 
+    const key_zone = tracy.ZoneN(@src(), "checking for node_key collision");
     const node_key = self.node_table.getKeyHash(hash_str);
     if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_|
         std.debug.panic("hash_string='{s}' has collision\n", .{hash_str});
+    key_zone.End();
 
+    const node_zone = tracy.ZoneN(@src(), "get node from table");
     // if a node already exists that matches this one we just use that one
     // this way the persistant cross-frame data is possible
     const lookup_result = try self.node_table.getOrPutHash(node_key);
     var node = lookup_result.value_ptr;
+    node_zone.End();
 
+    const setup_zone = tracy.ZoneN(@src(), "setup node attribs");
+    defer setup_zone.End();
     // link node into the tree
     var parent = self.parent_stack.top();
     node.first = null;
@@ -715,6 +727,9 @@ pub fn startBuild(
     events: *Window.EventQueue,
     window: *Window,
 ) !void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     self.hot_node_key = null;
     // get the signal in the reverse order that we render in (if a node is on top
     // of another, the top one should get the inputs, no the bottom one)
@@ -733,6 +748,7 @@ pub fn startBuild(
     // frame, while maintaining *some* inter-frame consistency
     self.prng.state = 0;
 
+    const id_zone = tracy.ZoneN(@src(), "remove no_id nodes");
     // remove the `no_id` nodes from the hash table before starting this new frame
     // TODO: is this necessary or just a memory saving thing? because if it's the
     //       latter, these nodes should get yetted on the next frame anyway...
@@ -740,6 +756,7 @@ pub fn startBuild(
     while (node_iter.next()) |node| {
         if (node.flags.no_id) try node_iter.removeCurrent();
     }
+    id_zone.End();
 
     const screen_size = vec2{ @as(f32, @floatFromInt(screen_w)), @as(f32, @floatFromInt(screen_h)) };
     self.screen_size = screen_size;
@@ -775,6 +792,9 @@ pub fn startBuild(
 }
 
 pub fn endBuild(self: *UI, dt: f32) void {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     if (self.first_error_trace) |error_trace| {
         std.debug.print("Error '{s}' occurred during the UI building phase with the following error trace:\n{}\n", .{
             self.first_error_name, error_trace,
@@ -791,18 +811,23 @@ pub fn endBuild(self: *UI, dt: f32) void {
     std.debug.assert(self.parent_stack.len() == 0);
 
     // stale node pruning, or else they just keep taking up memory forever
+    const prune_zone = tracy.ZoneN(@src(), "prune stale nodes");
     var node_iter = self.node_table.valueIterator();
     while (node_iter.next()) |node_ptr| {
         if (node_ptr.last_frame_touched < self.frame_idx) {
             node_iter.removeCurrent() catch unreachable;
         }
     }
+    prune_zone.End();
 
+    const update_zone = tracy.ZoneN(@src(), "update hot/active/focused node keys");
     // in case the hot/active/focused node key is pointing to a stale node
     if (self.hot_node_key != null and !self.node_table.hasKeyHash(self.hot_node_key.?)) self.hot_node_key = null;
     if (self.active_node_key != null and !self.node_table.hasKeyHash(self.active_node_key.?)) self.active_node_key = null;
     if (self.focused_node_key != null and !self.node_table.hasKeyHash(self.focused_node_key.?)) self.focused_node_key = null;
+    update_zone.End();
 
+    const anim_zone = tracy.ZoneN(@src(), "update anim values");
     // update the transition/animation values
     const fast_rate = 1 - std.math.pow(f32, 2, -20.0 * dt);
     node_iter = self.node_table.valueIterator();
@@ -815,6 +840,7 @@ pub fn endBuild(self: *UI, dt: f32) void {
         node_ptr.hot_trans += (hot_target - node_ptr.hot_trans) * fast_rate;
         node_ptr.active_trans += (active_target - node_ptr.active_trans) * fast_rate;
     }
+    anim_zone.End();
 
     // do all the layout
     self.layoutTree(self.root.?);
@@ -833,6 +859,9 @@ fn computeSignalsForTree(self: *UI, root: *Node) !void {
 }
 
 pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     var signal = Signal{
         .mouse_pos = self.mouse_pos - node.rect.min,
         // .mouse_drag = null,
@@ -985,6 +1014,10 @@ pub fn textPosFromNode(self: *UI, node: *Node) vec2 {
 }
 
 fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
+    const zone = tracy.Zone(@src());
+    zone.Text(string);
+    defer zone.End();
+
     const font: *Font = switch (node.font_type) {
         .text => &self.font,
         .text_bold => &self.font_bold,
@@ -1093,6 +1126,9 @@ fn findTextLineInfo(str: []const u8) struct {
 
 /// find the index of the `nth` occurence of `scalar` in `slice`
 pub fn indexOfNthScalar(slice: []const u8, scalar: u8, nth: usize) ?usize {
+    const zone = tracy.Zone(@src());
+    defer zone.End();
+
     if (nth == 0) return null;
 
     const vec_size = comptime std.simd.suggestVectorSize(u8) orelse 128 / 8;
@@ -1124,6 +1160,9 @@ pub fn indexOfNthScalar(slice: []const u8, scalar: u8, nth: usize) ?usize {
 }
 
 pub fn fmtTmpString(ui: *UI, comptime fmt: []const u8, args: anytype) []const u8 {
+    const zone = tracy.ZoneN(@src(), "fmtTmpString");
+    defer zone.End();
+
     return std.fmt.allocPrint(ui.build_arena.allocator(), fmt, args) catch |e| {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
         return "";
@@ -1278,7 +1317,9 @@ pub const NodeTable = struct {
     }
 
     pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GetOrPutResult {
+        const map_cap = self.ptr_map.capacity();
         const gop = try self.ptr_map.getOrPut(hash);
+        if (self.ptr_map.capacity() > map_cap) tracy.Message("NodeTable.ptr_map grew");
         if (!gop.found_existing) {
             const value_ptr = try self.allocator.create(V);
             gop.value_ptr.* = value_ptr;
