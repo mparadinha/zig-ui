@@ -33,7 +33,7 @@ prng: PRNG,
 // if we accidentally create two nodes with the same hash in the frame this
 // might lead to the node tree having cycles (which hangs whenever we traverse it)
 // this is cleared every frame
-node_keys_this_frame: std.ArrayList(NodeKey),
+node_keys_this_frame: std.AutoHashMap(NodeKey, void),
 
 // to prevent having error return in all the functions, we ignore the errors during the
 // ui building phase, and return one only at the end of the building phase.
@@ -117,7 +117,7 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
         .node_table = NodeTable.init(allocator),
         .prng = PRNG.init(0),
 
-        .node_keys_this_frame = std.ArrayList(NodeKey).init(allocator),
+        .node_keys_this_frame = std.AutoHashMap(NodeKey, void).init(allocator),
 
         .first_error_trace = null,
         .first_error_name = "",
@@ -568,9 +568,8 @@ pub fn addNodeRawStrings(
     const node_hash_str = try arena.dupe(u8, hash_str);
 
     const node_key = self.node_table.ctx.hash(node_hash_str);
-    if (std.mem.indexOfScalar(NodeKey, self.node_keys_this_frame.items, node_key)) |_| {
+    if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_|
         std.debug.panic("hash_string='{s}' has collision\n", .{node_hash_str});
-    } else try self.node_keys_this_frame.append(node_key);
 
     // if a node already exists that matches this one we just use that one
     // this way the persistant cross-frame data is possible
