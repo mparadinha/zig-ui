@@ -547,7 +547,7 @@ pub fn addNodeRawStrings(
 ) !*Node {
     const arena = self.build_arena.allocator();
 
-    const display_str = display_str_in;
+    const display_str = if (flags.draw_text) display_str_in else &[0]u8{};
     const hash_str = if (flags.no_id) blk: {
         // for `no_id` nodes we use a random number as the hash string, so they don't clobber each other
         break :blk &randomString(&self.prng);
