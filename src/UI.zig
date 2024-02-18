@@ -567,7 +567,7 @@ pub fn addNodeRawStrings(
     const node_display_str = try arena.dupe(u8, display_str);
     const node_hash_str = try arena.dupe(u8, hash_str);
 
-    const node_key = self.node_table.ctx.hash(node_hash_str);
+    const node_key = self.node_table.getKeyHash(node_hash_str);
     if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_|
         std.debug.panic("hash_string='{s}' has collision\n", .{node_hash_str});
 
@@ -760,7 +760,7 @@ pub fn startBuild(
         self.hot_node_key,
         self.active_node_key,
     }) |node_key| {
-        if (node_key) |key| mouse_cursor = self.node_table.getFromHash(key).?.cursor_type;
+        if (node_key) |key| mouse_cursor = self.nodeFromKey(key).?.cursor_type;
     }
     window.setCursor(mouse_cursor);
 }
@@ -1144,7 +1144,7 @@ pub fn nodeFromKey(self: UI, key: NodeKey) ?*Node {
 }
 
 pub fn keyFromNode(self: UI, node: *Node) NodeKey {
-    return self.node_table.ctx.hash(hashPartOfString(node.hash_string));
+    return self.node_table.getKeyHash(hashPartOfString(node.hash_string));
 }
 
 pub fn displayPartOfString(string: []const u8) []const u8 {
@@ -1238,122 +1238,100 @@ pub fn Stack(comptime T: type) type {
 /// Supports removing entries while iterating over them.
 pub const NodeTable = struct {
     allocator: Allocator,
-    ctx: HashContext,
-
-    key_mappings: KeyMap,
+    ptr_map: PtrMap,
 
     const K = []const u8;
     const V = Node;
     const Hash = u64;
-
-    // note: this makes lookups O(n). if that starts to become a problem
-    // we can just switch this ArrayList to a HashMap and NodeTable becomes
-    // essentially a wrapper around std.HashMap
-    const KeyMap = std.ArrayList(struct { key_hash: Hash, value_ptr: *V });
-
-    const HashContext = struct {
-        pub fn hash(self: @This(), key: K) u64 {
-            _ = self;
-            return std.hash_map.hashString(key);
+    const PtrMap = std.ArrayHashMap(Hash, *V, struct {
+        pub fn hash(_: @This(), key: Hash) u32 {
+            return @truncate(key);
         }
-        pub fn eql(self: @This(), key_a: K, key_b: K) bool {
-            _ = self;
-            return std.mem.eql(u8, key_a, key_b);
+        pub fn eql(_: @This(), a: Hash, b: Hash, _: usize) bool {
+            return a == b;
         }
-    };
+    }, false);
 
     pub fn init(allocator: Allocator) NodeTable {
         return .{
             .allocator = allocator,
-            .ctx = HashContext{},
-            .key_mappings = KeyMap.init(allocator),
+            .ptr_map = PtrMap.init(allocator),
         };
     }
 
     pub fn deinit(self: *NodeTable) void {
-        for (self.key_mappings.items) |map| self.allocator.destroy(map.value_ptr);
-        self.key_mappings.deinit();
+        var ptr_iter = self.ptr_map.iterator();
+        while (ptr_iter.next()) |entry| self.allocator.destroy(entry.value_ptr.*);
+        self.ptr_map.deinit();
     }
 
     pub const GetOrPutResult = struct { found_existing: bool, value_ptr: *V };
 
     pub fn getOrPut(self: *NodeTable, key: K) !GetOrPutResult {
-        const key_hash = self.ctx.hash(key);
-        for (self.key_mappings.items) |key_map| {
-            if (key_map.key_hash == key_hash) {
-                return GetOrPutResult{ .found_existing = true, .value_ptr = key_map.value_ptr };
-            }
+        const hash = self.getKeyHash(key);
+
+        const gop = try self.ptr_map.getOrPut(hash);
+        if (!gop.found_existing) {
+            const value_ptr = try self.allocator.create(V);
+            gop.value_ptr.* = value_ptr;
         }
 
-        const value_ptr = try self.allocator.create(V);
-        try self.key_mappings.append(.{ .key_hash = key_hash, .value_ptr = value_ptr });
-
-        return GetOrPutResult{ .found_existing = false, .value_ptr = value_ptr };
+        return GetOrPutResult{
+            .found_existing = gop.found_existing,
+            .value_ptr = gop.value_ptr.*,
+        };
     }
 
-    pub fn getFromHash(self: *NodeTable, hash: Hash) ?*V {
-        for (self.key_mappings.items) |key_map| {
-            if (key_map.key_hash == hash) {
-                return key_map.value_ptr;
-            }
-        }
-        return null;
+    pub fn getKeyHash(_: NodeTable, key: K) Hash {
+        return std.hash_map.hashString(key);
+    }
+
+    pub fn getFromHash(self: NodeTable, hash: Hash) ?*V {
+        return self.ptr_map.get(hash);
     }
 
     /// does nothing if the key doesn't exist
     pub fn remove(self: *NodeTable, key: K) void {
-        const key_hash = self.ctx.hash(key);
-        for (self.key_mappings.items, 0..) |key_map, i| {
-            if (key_map.key_hash == key_hash) {
-                self.allocator.destroy(key_map.value_ptr);
-                _ = self.key_mappings.swapRemove(i);
-                return;
-            }
+        const hash = self.getKeyHash(key);
+        if (self.ptr_map.fetchSwapRemove(hash)) |pair| {
+            self.allocator.destroy(pair.value);
         }
     }
 
     pub fn hasKey(self: *NodeTable, key: K) bool {
-        return self.hasKeyHash(self.ctx.hash(key));
+        return self.hasKeyHash(self.getKeyHash(key));
     }
 
     pub fn hasKeyHash(self: *NodeTable, hash: Hash) bool {
-        for (self.key_mappings.items) |key_map| {
-            if (key_map.key_hash == hash) return true;
-        }
-        return false;
+        return self.ptr_map.contains(hash);
+    }
+
+    pub fn count(self: NodeTable) usize {
+        return self.ptr_map.count();
+    }
+
+    /// Any adding/removing to/from the table might invalidate this array
+    pub fn values(self: *NodeTable) []*V {
+        return self.ptr_map.values();
     }
 
     pub fn valueIterator(self: *NodeTable) ValueIterator {
-        return ValueIterator{ .table = self, .iter_idx = null };
+        return ValueIterator{ .iter = self.ptr_map.iterator(), .table = self };
     }
 
     pub const ValueIterator = struct {
+        iter: PtrMap.Iterator,
         table: *NodeTable,
-        iter_idx: ?usize, // non-null while iterating
 
-        pub fn next(self: *ValueIterator) ?*V {
-            const idx = if (self.iter_idx) |idx| idx else blk: {
-                self.iter_idx = 0;
-                break :blk 0;
-            };
-            self.iter_idx.? += 1;
-
-            if (idx >= self.table.key_mappings.items.len) return null;
-
-            return self.table.key_mappings.items[idx].value_ptr;
+        pub fn next(it: *ValueIterator) ?*V {
+            const iter_next = it.iter.next();
+            return if (iter_next) |entry| entry.value_ptr.* else null;
         }
 
-        pub const RemoveError = error{NotIterating};
-
-        /// remove the thing that was last return by `next` from the table
-        /// sets the removed entry to undefined memory
-        pub fn removeCurrent(self: *ValueIterator) RemoveError!void {
-            const idx = if (self.iter_idx) |idx| idx else return RemoveError.NotIterating;
-            if (idx > self.table.key_mappings.items.len) return RemoveError.NotIterating;
-
-            self.table.allocator.destroy(self.table.key_mappings.items[idx - 1].value_ptr);
-            _ = self.table.key_mappings.swapRemove(idx - 1);
-            self.iter_idx.? -= 1;
+        pub fn removeCurrent(it: *ValueIterator) !void {
+            if (it.iter.index > 0) it.iter.index -= 1;
+            it.table.ptr_map.swapRemoveAt(it.iter.index);
+            it.iter.len -= 1;
         }
     };
 };

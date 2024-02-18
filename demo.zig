@@ -134,7 +134,7 @@ fn showDemo(
         ui.labelF("mouse_pos={d}", .{ui.mouse_pos});
         ui.labelF("frame_idx={d}", .{ui.frame_idx});
         ui.labelF("{d:4.2} fps", .{1 / dt});
-        ui.labelF("# of nodes: {}", .{ui.node_table.key_mappings.items.len});
+        ui.labelF("# of nodes: {}", .{ui.node_table.count()});
         ui.labelF("build_arena capacity: {:.2}", .{
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
         });
