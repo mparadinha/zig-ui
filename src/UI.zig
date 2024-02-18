@@ -482,19 +482,19 @@ pub const RelativePlacement = struct {
 };
 
 pub const Signal = struct {
-    clicked: bool,
-    pressed: bool,
-    released: bool,
-    double_clicked: bool,
-    triple_clicked: bool,
-    hovering: bool,
-    held_down: bool,
-    enter_pressed: bool,
+    clicked: bool = false,
+    pressed: bool = false,
+    released: bool = false,
+    double_clicked: bool = false,
+    triple_clicked: bool = false,
+    hovering: bool = false,
+    held_down: bool = false,
+    enter_pressed: bool = false,
     mouse_pos: vec2, // these are relative to bottom-left corner of node
     // mouse_drag: ?Rect, // relative coordinates, just like `Signal.mouse_pos`
-    scroll_amount: vec2, // positive means scrolling up/left
-    focused: bool,
-    toggled: bool,
+    scroll_amount: vec2 = undefined, // positive means scrolling up/left
+    focused: bool = false,
+    toggled: bool = false,
 };
 
 pub fn addNode(self: *UI, flags: Flags, string: []const u8, init_args: anytype) *Node {
@@ -617,7 +617,7 @@ pub fn addNodeRawStrings(
     // update cross-frame (persistant) data
     node.last_frame_touched = self.frame_idx;
     if (node.first_time) {
-        node.signal = try self.computeNodeSignal(node);
+        node.signal = .{ .mouse_pos = undefined };
         node.first_frame_touched = self.frame_idx;
         node.rel_pos = RelativePlacement.match(.btm_left);
         node.last_click_time = 0;
@@ -825,19 +825,8 @@ fn computeSignalsForTree(self: *UI, root: *Node) !void {
 
 pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     var signal = Signal{
-        .clicked = false,
-        .pressed = false,
-        .released = false,
-        .double_clicked = false,
-        .triple_clicked = false,
-        .hovering = false,
-        .held_down = false,
-        .enter_pressed = false,
         .mouse_pos = self.mouse_pos - node.rect.min,
         // .mouse_drag = null,
-        .scroll_amount = vec2{ 0, 0 },
-        .focused = false,
-        .toggled = false,
     };
 
     const clipped_rect = Rect.intersection(node.clip_rect, node.rect);
