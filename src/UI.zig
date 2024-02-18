@@ -10,7 +10,7 @@ const Window = zig_ui.Window;
 const Font = zig_ui.Font;
 const gfx = @import("graphics.zig");
 
-const build_opts = @import("build_opts");
+const build_opts = @import("build_options");
 
 const UI = @This();
 pub usingnamespace @import("widgets.zig");
