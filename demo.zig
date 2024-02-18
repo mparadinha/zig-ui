@@ -58,6 +58,7 @@ const DemoState = struct {
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
     debug_stats: bool = true,
     listbox_idx: usize = 0,
+    dummy_labels_count: f32 = 3000,
 };
 
 fn showDemo(
@@ -147,5 +148,20 @@ fn showDemo(
         ui.labelF("build_arena capacity: {:.2}", .{
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
         });
+    }
+
+    ui.label("Testing performance:");
+    {
+        if (ui.toggleButton("Show dummy labels", true).toggled) {
+            const slider_size = [2]UI.Size{ UI.Size.pixels(200, 1), UI.Size.text(1) };
+            {
+                ui.startLine();
+                ui.slider("Number of dummy labels", slider_size, &state.dummy_labels_count, 0, 10_000);
+                ui.labelF("{}", .{@as(usize, @intFromFloat(@round(state.dummy_labels_count)))});
+                ui.endLine();
+            }
+            for (0..@intFromFloat(@round(state.dummy_labels_count))) |i|
+                ui.labelF("{}", .{i});
+        }
     }
 }
