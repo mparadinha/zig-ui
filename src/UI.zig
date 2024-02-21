@@ -7,7 +7,7 @@ const vec3 = zig_ui.vec3;
 const vec4 = zig_ui.vec4;
 const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
-const Font = @import("Font.zig");
+const Font = zig_ui.Font;
 const gfx = @import("graphics.zig");
 
 const build_opts = @import("build_opts");
@@ -110,9 +110,9 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
             .geometry = @embedFile("shader.geom"),
             .fragment = @embedFile("shader.frag"),
         }),
-        .font = try Font.from_ttf(allocator, font_opts.font_path),
-        .font_bold = try Font.from_ttf(allocator, font_opts.bold_font_path),
-        .icon_font = try Font.from_ttf(allocator, font_opts.icon_font_path),
+        .font = try Font.fromTTF(allocator, font_opts.font_path),
+        .font_bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
+        .icon_font = try Font.fromTTF(allocator, font_opts.icon_font_path),
         .build_arena = std.heap.ArenaAllocator.init(allocator),
         .node_table = NodeTable.init(allocator),
         .prng = PRNG.init(0),
@@ -980,7 +980,7 @@ fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
     const text_line_info = findTextLineInfo(string);
     const num_lines = text_line_info.line_count;
     const longest_line = text_line_info.longest_line;
-    if (num_lines == 0 or num_lines == 1) {
+    if (num_lines <= 1) {
         const font_rect = try font.textRect(string, node.font_size);
         return .{ .min = font_rect.min, .max = font_rect.max };
     }
@@ -1007,6 +1007,13 @@ fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
     };
 }
 
+/// note that `longest_line` is the longest in *bytes*! which only serves
+/// as a _heuristic_ for the longest line.
+/// to actually get the line with the largest display length we need to
+/// do all the Font work, because line length depends on the sizes of the
+/// glyphs, not amount of bytes. this is true even for ASCII only `str`s,
+/// for e.g. with a non-monospaced font, a line of 100 'i's will be shorted
+/// then a line of 50 'M's
 fn findTextLineInfo(str: []const u8) struct {
     line_count: usize,
     longest_line: []const u8,
