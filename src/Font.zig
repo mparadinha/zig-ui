@@ -144,7 +144,7 @@ fn buildTextAt(
         if (codepoint == '\n') {
             if (next_codepoint != null) {
                 cursor[0] = start_pos[0];
-                cursor[1] += metrics.line_advance; // stb uses +y up
+                cursor[1] -= metrics.line_advance; // stb uses +y up
             }
             continue;
         }
