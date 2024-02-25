@@ -9,6 +9,7 @@ const glfw = zig_ui.glfw;
 
 const Window = @This();
 
+allocator: Allocator,
 window: glfw.Window,
 event_queue: EventQueue,
 cursors: struct {
@@ -31,13 +32,25 @@ pub const Cursor = enum {
 
 pub const InitError = glfw.ErrorCode || gl.LoadError;
 
-/// call 'finish_setup' right after 'init'
 /// call 'deinit' to clean up resources
-pub fn init(allocator: Allocator, width: u32, height: u32, title: []const u8) InitError!Window {
+pub fn init(allocator: Allocator, width: u32, height: u32, title: []const u8) InitError!*Window {
     _ = glfw.setErrorCallback(glfw_error_callback); // returns previous callback
 
     if (!glfw.init(.{})) return glfw.mustGetErrorCode();
 
+    const self = Window.create(allocator, width, height, title);
+
+    // load OpenGL now
+    try gl.load({}, get_proc_address_fn);
+    gl.enable(gl.DEBUG_OUTPUT);
+    gl.debugMessageCallback(gl_error_callback, null);
+
+    return self;
+}
+
+/// For creating more OS windows after the first one with `init`
+/// call 'destroy' to clean up resources
+pub fn create(allocator: Allocator, width: u32, height: u32, title: []const u8) InitError!*Window {
     const window = glfw.Window.create(
         width,
         height,
@@ -64,12 +77,9 @@ pub fn init(allocator: Allocator, width: u32, height: u32, title: []const u8) In
     _ = window.setScrollCallback(scroll_callback);
     _ = window.setCharCallback(char_callback);
 
-    // load OpenGL now
-    try gl.load({}, get_proc_address_fn);
-    gl.enable(gl.DEBUG_OUTPUT);
-    gl.debugMessageCallback(gl_error_callback, null);
-
-    return Window{
+    var self = try allocator.create(Window);
+    self.* = Window{
+        .allocator = allocator,
         .window = window,
         .event_queue = EventQueue.init(allocator),
         .cursors = .{
@@ -81,9 +91,16 @@ pub fn init(allocator: Allocator, width: u32, height: u32, title: []const u8) In
             .vresize = glfw.Cursor.createStandard(.resize_ns).?,
         },
     };
+    self.window.setUserPointer(self);
+    return self;
 }
 
 pub fn deinit(self: *Window) void {
+    self.destroy();
+    glfw.terminate();
+}
+
+pub fn destroy(self: *Window) void {
     self.cursors.arrow.destroy();
     self.cursors.ibeam.destroy();
     self.cursors.crosshair.destroy();
@@ -92,13 +109,10 @@ pub fn deinit(self: *Window) void {
     self.cursors.vresize.destroy();
 
     self.window.destroy();
-    glfw.terminate();
 
     self.event_queue.deinit();
-}
 
-pub fn finishSetup(self: *Window) void {
-    self.window.setUserPointer(self);
+    self.allocator.destroy(self);
 }
 
 pub fn shouldClose(self: *Window) bool {

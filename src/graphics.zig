@@ -218,12 +218,11 @@ pub const Shader = struct {
         if (success == gl.FALSE) {
             var msg_buf: [0x1000]u8 = undefined;
             gl.getShaderInfoLog(id, 0x1000, null, &msg_buf[0]);
-            std.log.info("{s} (type={s}) compile error:\n{s}", .{
+            std.debug.panic("{s} (type={s}) compile error:\n{s}", .{
                 self.name,
                 @tagName(shader_type),
                 @as([*c]u8, &msg_buf[0]),
             });
-            unreachable;
         }
 
         return id;
@@ -241,10 +240,8 @@ pub const Shader = struct {
         const filepath = std.fs.path.join(self.allocator, &.{ src_dir, filename }) catch unreachable;
         defer self.allocator.free(filepath);
 
-        const src = std.fs.cwd().readFileAlloc(self.allocator, filepath, 0x1_0000) catch |err| {
-            std.log.info("error reading '{s}': {}", .{ filepath, err });
-            return 0;
-        };
+        const src = std.fs.cwd().readFileAlloc(self.allocator, filepath, std.math.maxInt(usize)) catch |err|
+            std.debug.panic("error reading '{s}': {}", .{ filepath, err });
         defer self.allocator.free(src);
 
         return self.compile_src(src, shader_type);
@@ -262,8 +259,7 @@ pub const Shader = struct {
         if (success == gl.FALSE) {
             var msg_buf: [0x1000]u8 = undefined;
             gl.getProgramInfoLog(self.prog_id, 0x1000, null, &msg_buf[0]);
-            std.log.info("{s} link error: {s}", .{ self.name, @as([*c]u8, &msg_buf[0]) });
-            unreachable;
+            std.debug.panic("{s} link error: {s}", .{ self.name, @as([*c]u8, &msg_buf[0]) });
         }
     }
 
@@ -281,7 +277,6 @@ pub const Shader = struct {
     pub fn uniform(self: Shader, name: []const u8) i32 {
         const loc = gl.getUniformLocation(self.prog_id, &name[0]);
         if (loc == -1) std.log.err("error getting uniform '{s}' from shader '{s}'", .{ name, self.name });
-        //if (loc == -1) std.debug.panic("error getting uniform '{s}' from shader '{s}'", .{ name, self.name });
         return loc;
     }
 

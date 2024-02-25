@@ -1420,212 +1420,180 @@ pub fn dumpNodeTreeGraph(self: *UI, root: *Node, file: std.fs.File) !void {
 
 pub const DebugView = struct {
     allocator: Allocator,
+    window: *Window,
     ui: UI,
-    active: bool,
-    node_list_idx: usize,
-    node_query_pos: ?vec2,
-    anchor_right: bool,
-    show_help: bool,
+    last_time: f32,
+    selected_node: ?*Node = null,
 
-    pub fn init(allocator: Allocator) !DebugView {
+    pub fn start(allocator: Allocator) !DebugView {
+        const saved_ctx = glfw.getCurrentContext().?;
+        defer glfw.makeContextCurrent(saved_ctx);
+
+        const window = try Window.create(allocator, 1400, 800, "UI Debug View");
+        glfw.swapInterval(0);
+
+        var ui = try UI.init(allocator, .{});
+        ui.base_style.font_size = 16;
+        ui.base_style.border_thickness = 2;
+
         return DebugView{
             .allocator = allocator,
-            .ui = try UI.init(allocator, .{}),
-            .active = false,
-            .node_list_idx = 0,
-            .node_query_pos = null,
-            .anchor_right = false,
-            .show_help = true,
+            .window = window,
+            .ui = ui,
+            .last_time = @floatCast(glfw.getTime()),
         };
     }
 
     pub fn deinit(self: *DebugView) void {
+        self.window.destroy();
         self.ui.deinit();
     }
 
-    pub fn show(
-        self: *DebugView,
-        ui: *UI,
-        width: u32,
-        height: u32,
-        mouse_pos: vec2,
-        events: *Window.EventQueue,
-        window: *Window,
-        dt: f32,
-    ) !void {
-        // ctrl+shift+h to toggle help menu
-        const ctrl_shift = Window.InputEvent.Modifiers{ .shift = true, .control = true };
-        if (events.searchAndRemove(.KeyDown, .{ .key = .h, .mods = ctrl_shift }))
-            self.show_help = !self.show_help;
-        // scroll up/down to change the highlighted node in the list
-        if (events.fetchAndRemove(.MouseScroll, null)) |scroll_ev| {
-            if (scroll_ev.y < 0) self.node_list_idx += 1;
-            if (scroll_ev.y > 0) {
-                if (self.node_list_idx > 0) self.node_list_idx -= 1;
+    pub fn run(self: *DebugView, main_ui: *const UI) !bool {
+        const window = self.window;
+        const ui = &self.ui;
+
+        const saved_ctx = glfw.getCurrentContext().?;
+        defer glfw.makeContextCurrent(saved_ctx);
+        glfw.makeContextCurrent(window.window);
+
+        if (window.shouldClose()) {
+            self.deinit();
+            return false;
+        }
+
+        // grab all window/input information we need for this frame
+        const fbsize = window.getFramebufferSize();
+        const cur_time: f32 = @floatCast(glfw.getTime());
+        const dt = cur_time - self.last_time;
+        self.last_time = cur_time;
+        const mouse_pos = window.getMousePos();
+
+        try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, window);
+        try self.show(main_ui);
+        ui.endBuild(dt);
+
+        window.clear(vec4{ 0, 0, 0, 1 });
+        try ui.render();
+        window.update();
+
+        return true;
+    }
+
+    pub fn show(self: *DebugView, main_ui: *const UI) !void {
+        const ui = &self.ui;
+
+        const top_p = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.exact(.percent, 1, 1), .x);
+        defer ui.popParentAssert(top_p);
+        {
+            const node_list_p = ui.pushLayoutParent(.{
+                .scroll_children_y = true,
+                .clip_children = true,
+            }, "node_list_p", [2]UI.Size{
+                UI.Size.children(0.3),
+                UI.Size.percent(1, 1),
+            }, .y);
+            defer ui.popParentAssert(node_list_p);
+
+            try self.showNodeList(main_ui);
+        }
+        if (self.selected_node) |node| {
+            const node_info_p = ui.pushLayoutParent(.{
+                .scroll_children_y = true,
+            }, "node_info_p", [2]UI.Size{
+                UI.Size.percent(0.5, 1),
+                UI.Size.percent(1, 1),
+            }, .y);
+            defer ui.popParentAssert(node_info_p);
+
+            try self.showNodeInfo(node);
+        }
+    }
+
+    pub fn showNodeList(self: *DebugView, main_ui: *const UI) !void {
+        const ui = &self.ui;
+
+        var iter = @import("rendering.zig").DepthFirstNodeIterator{ .cur_node = main_ui.root.? };
+        while (iter.next()) |node| {
+            ui.startLine();
+            defer ui.endLine();
+            ui.spacer(.x, UI.Size.pixels(@floatFromInt(5 * iter.parent_level), 1));
+            ui.labelF("[{}]", .{iter.parent_level});
+            // _ = ui.toggleButtonF("###{*}_toggle", .{node}, false);
+            if (node.flags.no_id and node.display_string.len > 0) {
+                if (ui.textBoxF("{s}###{*}", .{ node.display_string, node }).hovering) {
+                    self.selected_node = node;
+                }
+            } else {
+                if (ui.textBoxF("{x}###{*}", .{ node.key, node }).hovering) {
+                    self.selected_node = node;
+                }
             }
         }
-        // ctrl+shift+scroll_click to freeze query position to current mouse_pos
-        if (events.find(.MouseUp, .{ .button = .middle, .mods = ctrl_shift })) |ev_idx| blk: {
-            const mods = window.getModifiers();
-            if (!(mods.shift and mods.control)) break :blk;
-            self.node_query_pos = if (self.node_query_pos) |_| null else mouse_pos;
-            _ = events.removeAt(ev_idx);
+
+        for ([_]?*Node{
+            main_ui.root,
+            main_ui.ctx_menu_root,
+            main_ui.tooltip_root,
+        }) |opt_node| {
+            if (opt_node) |node| {
+                if (ui.buttonF("{x}", .{node.key}).clicked) self.selected_node = node;
+            }
         }
-        // ctrl+shift+left/right to anchor left/right
-        if (events.searchAndRemove(.KeyDown, .{ .key = .left, .mods = ctrl_shift }))
-            self.anchor_right = false;
-        if (events.searchAndRemove(.KeyDown, .{ .key = .right, .mods = ctrl_shift }))
-            self.anchor_right = true;
-        // TODO: change the top_left position for the dbg_ui_view?
-
-        // grab a list of all the nodes that overlap with the query position
-        const query_pos = if (self.node_query_pos) |pos| pos else mouse_pos;
-        var selected_nodes = std.ArrayList(*UI.Node).init(self.allocator);
-        defer selected_nodes.deinit();
-        var node_iter = ui.node_table.valueIterator();
-        while (node_iter.next()) |node| {
-            if (node.rect.contains(query_pos)) try selected_nodes.append(node);
+        for (main_ui.window_roots.items) |node| {
+            if (ui.buttonF("{x}", .{node.key}).clicked) self.selected_node = node;
         }
-        if (selected_nodes.items.len == 0) return;
 
-        self.node_list_idx = clamp(self.node_list_idx, 0, selected_nodes.items.len - 1);
-        const active_node = selected_nodes.items[self.node_list_idx];
-
-        try self.ui.startBuild(width, height, mouse_pos, events, window);
-
-        // red border around the selected nodes
-        const border_node_flags = Flags{
-            .no_id = true,
-            .draw_border = true,
-            .floating_x = true,
-            .floating_y = true,
-        };
-        self.ui.pushStyle(.{ .border_thickness = 2 });
-        for (selected_nodes.items) |node| {
-            _ = self.ui.addNode(border_node_flags, "", .{
-                .border_color = vec4{ 1, 0, 0, 0.5 },
-                .rel_pos = RelativePlacement.simple(node.rect.min),
-                .size = Size.fromRect(node.rect),
-            });
+        if (self.selected_node) |node| {
+            for (main_ui.node_table.ptr_map.values()) |node_ptr| {
+                if (node_ptr == node) break;
+            } else self.selected_node = null;
         }
-        // green border for the node selected from the list (separated so it always draws on top)
-        _ = self.ui.addNode(border_node_flags, "", .{
-            .border_color = vec4{ 0, 1, 0, 0.5 },
-            .rel_pos = RelativePlacement.simple(active_node.rect.min),
-            .size = Size.fromRect(active_node.rect),
-        });
-        // blue border to show the padding
-        if (@reduce(.And, active_node.padding != vec2{ 0, 0 })) {
-            _ = self.ui.addNode(border_node_flags, "", .{
-                .border_color = vec4{ 0, 0, 1, 0.5 },
-                .rel_pos = RelativePlacement.simple(active_node.rect.min + active_node.padding),
-                .size = size: {
-                    const size = active_node.rect.size() - active_node.padding * vec2{ 2, 2 };
-                    break :size Size.exact(.pixels, size[0], size[1]);
+    }
+
+    pub fn showNodeInfo(self: *DebugView, node: *const Node) !void {
+        const ui = &self.ui;
+
+        inline for (@typeInfo(Node).Struct.fields) |field| {
+            const name = field.name;
+            const value = @field(node, name);
+
+            // const skips = [_][]const u8{};
+
+            if (@typeInfo(field.type) == .Enum) {
+                ui.labelF("{s}=.{s}\n", .{ name, @tagName(value) });
+                continue;
+            }
+            switch (field.type) {
+                ?*Node => if (value) |link| {
+                    ui.labelF("{s}.hash_string={x}", .{ name, link.key });
                 },
-            });
-        }
-        _ = self.ui.popStyle();
-
-        self.ui.pushStyle(.{ .font_size = 16, .bg_color = vec4{ 0, 0, 0, 0.75 } });
-        defer _ = self.ui.popStyle();
-        self.ui.root_node.?.layout_axis = .x;
-        if (self.anchor_right) self.ui.spacer(.x, Size.percent(1, 0));
-        {
-            const left_bg_node = self.ui.addNode(.{
-                .no_id = true,
-                .draw_background = true,
-                .clip_children = true,
-            }, "", .{
-                .layout_axis = .y,
-                .size = [2]Size{ Size.children(0.5), Size.children(1) },
-            });
-            self.ui.pushParent(left_bg_node);
-            defer self.ui.popParentAssert(left_bg_node);
-
-            if (self.node_query_pos) |pos| self.ui.labelF("node_query_pos: {d}\n", .{pos});
-
-            for (selected_nodes.items, 0..) |node, idx| {
-                if (idx == self.node_list_idx) {
-                    self.ui.labelBoxF("hash=\"{s}\"", .{node.key});
-                } else {
-                    self.ui.labelF("hash=\"{s}\"", .{node.key});
-                }
+                Flags => {
+                    var buf = std.BoundedArray(u8, 1024){};
+                    inline for (@typeInfo(Flags).Struct.fields) |flag_field| {
+                        if (@field(value, flag_field.name)) {
+                            _ = try buf.writer().write(flag_field.name ++ ", ");
+                        }
+                    }
+                    ui.labelF("flags={s}", .{buf.slice()});
+                },
+                Signal => {
+                    var buf = std.BoundedArray(u8, 1024){};
+                    inline for (@typeInfo(Signal).Struct.fields) |signal_field| {
+                        if (signal_field.type == bool and @field(value, signal_field.name)) {
+                            _ = try buf.writer().write(signal_field.name ++ ", ");
+                        }
+                    }
+                    ui.labelF("{s}={{{s}.mouse_pos={d}, .scroll_amount={d}}}", .{
+                        name, buf.slice(), value.mouse_pos, value.scroll_amount,
+                    });
+                },
+                []const u8 => {
+                    ui.labelF("{s}=\"{s}\"", .{ name, value[0..@min(value.len, 35)] });
+                },
+                f32, [2]f32, [3]f32, [4]f32, vec2, vec3, vec4 => ui.labelF("{s}={d}", .{ name, value }),
+                else => ui.labelF("{s}={any}", .{ name, value }),
             }
         }
-        {
-            const right_bg_node = self.ui.addNode(.{
-                .no_id = true,
-                .draw_background = true,
-                .clip_children = true,
-            }, "", .{
-                .layout_axis = .y,
-                .size = [2]Size{ Size.children(1), Size.children(1) },
-            });
-            self.ui.pushParent(right_bg_node);
-            defer self.ui.popParentAssert(right_bg_node);
-
-            inline for (@typeInfo(Node).Struct.fields) |field| {
-                const name = field.name;
-                const value = @field(active_node, name);
-
-                // const skips = [_][]const u8{};
-
-                if (@typeInfo(field.type) == .Enum) {
-                    self.ui.labelF("{s}=.{s}\n", .{ name, @tagName(value) });
-                    continue;
-                }
-                switch (field.type) {
-                    ?*Node => if (value) |link| {
-                        self.ui.labelF("{s}.hash_string=\"{s}\"", .{ name, link.key });
-                    },
-                    Flags => {
-                        var buf = std.BoundedArray(u8, 1024){};
-                        inline for (@typeInfo(Flags).Struct.fields) |flag_field| {
-                            if (@field(value, flag_field.name)) {
-                                _ = try buf.writer().write(flag_field.name ++ ", ");
-                            }
-                        }
-                        self.ui.labelF("flags={s}", .{buf.slice()});
-                    },
-                    Signal => {
-                        var buf = std.BoundedArray(u8, 1024){};
-                        inline for (@typeInfo(Signal).Struct.fields) |signal_field| {
-                            if (signal_field.type == bool and @field(value, signal_field.name)) {
-                                _ = try buf.writer().write(signal_field.name ++ ", ");
-                            }
-                        }
-                        self.ui.labelF("{s}={{{s}.mouse_pos={d}, .scroll_amount={d}}}", .{
-                            name, buf.slice(), value.mouse_pos, value.scroll_amount,
-                        });
-                    },
-                    []const u8 => {
-                        self.ui.labelF("{s}=\"{s}\"", .{ name, value[0..@min(value.len, 35)] });
-                    },
-                    f32, [2]f32, [3]f32, [4]f32, vec2, vec3, vec4 => self.ui.labelF("{s}={d}", .{ name, value }),
-                    else => self.ui.labelF("{s}={any}", .{ name, value }),
-                }
-            }
-        }
-        if (self.show_help) {
-            const help_bg_node = self.ui.addNode(.{
-                .draw_background = true,
-                .clip_children = true,
-            }, "#help_bg_node", .{
-                .layout_axis = .y,
-                .size = [2]Size{ Size.children(1), Size.children(1) },
-            });
-            self.ui.pushParent(help_bg_node);
-            defer self.ui.popParentAssert(help_bg_node);
-
-            self.ui.label("Ctrl+Shift+H            -> toggle this help menu");
-            self.ui.label("Ctrl+Shift+D            -> toggle dbg UI");
-            self.ui.label("scroll up/down          -> choose highlighed node");
-            self.ui.label("Ctrl+Shift+ScrollClick  -> freeze mouse position");
-            self.ui.label("Ctrl+Shift+Left/Right   -> anchor left/right");
-        }
-
-        self.ui.endBuild(dt);
-        try self.ui.render();
     }
 };

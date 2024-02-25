@@ -31,14 +31,16 @@ pub fn main() !void {
         const mouse_pos = window.getMousePos();
         const fbsize = window.getFramebufferSize();
 
-        try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
+        try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, window);
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
         ui.endBuild(dt);
 
         window.clear(demo.clear_color);
         // do whatever other rendering you want here
         try ui.render();
-
+        if (demo.debug_view) |*debug_view| {
+            if (!try debug_view.run(&ui)) demo.debug_view = null;
+        }
         window.update();
     }
 }
@@ -49,10 +51,11 @@ const DemoState = struct {
     debug_stats: bool = true,
     listbox_idx: usize = 0,
     measuring_square_start: ?vec2 = null,
+    debug_view: ?UI.DebugView = null,
 };
 
 fn showDemo(
-    _: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     ui: *UI,
     mouse_pos: vec2,
     event_q: *Window.EventQueue,
@@ -162,6 +165,10 @@ fn showDemo(
         const dump_file = try std.fs.cwd().createFile(path, .{});
         defer dump_file.close();
         try ui.dumpNodeTreeGraph(ui.root.?, dump_file);
+    }
+
+    if (state.debug_view == null and ui.button("Open UI DebugView in new OS window").clicked) {
+        state.debug_view = try UI.DebugView.start(allocator);
     }
 
     // show at the end, to get more accurate stats for this frame
