@@ -256,7 +256,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
     }
 }
 
-const DepthFirstNodeIterator = struct {
+pub const DepthFirstNodeIterator = struct {
     cur_node: *Node,
     first_iteration: bool = true,
     parent_level: usize = 0, // how many times have we gone down the hierarchy

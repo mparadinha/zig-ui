@@ -115,7 +115,7 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
         .icon_font = try Font.fromTTF(allocator, font_opts.icon_font_path),
         .build_arena = std.heap.ArenaAllocator.init(allocator),
         .node_table = NodeTable.init(allocator),
-        .prng = PRNG.init(0),
+        .prng = .{ .state = 0 },
 
         .node_keys_this_frame = std.AutoHashMap(NodeKey, void).init(allocator),
 
@@ -206,6 +206,7 @@ pub const Node = struct {
     edge_softness: f32,
     border_thickness: f32,
     size: [2]Size,
+    alignment: Alignment,
     layout_axis: Axis,
     cursor_type: Cursor,
     font_type: FontType,
@@ -256,6 +257,7 @@ pub const CustomDrawFn = *const fn (
 ) error{OutOfMemory}!void;
 
 pub const Axis = enum { x, y };
+pub const Alignment = enum { start, center, end };
 pub const FontType = enum { text, text_bold, icon };
 pub const TextAlign = enum { left, center, right };
 
@@ -268,6 +270,7 @@ pub const Style = struct {
     border_thickness: f32 = 0,
     size: [2]Size = .{ Size.text(1), Size.text(1) },
     layout_axis: Axis = .y,
+    alignment: Alignment = .start,
     cursor_type: Cursor = .arrow,
     font_type: FontType = .text,
     font_size: f32 = 18,
@@ -720,6 +723,11 @@ pub fn startBuild(
 
     self.node_keys_this_frame.clearRetainingCapacity();
 
+    // the PRNG is only used for `no_id` hash generation.
+    // by reseting it every frame we still get 'random' hashes in the same
+    // frame, while maintaining *some* inter-frame consistency
+    self.prng.state = 0;
+
     // remove the `no_id` nodes from the hash table before starting this new frame
     // TODO: is this necessary or just a memory saving thing? because if it's the
     //       latter, these nodes should get yetted on the next frame anyway...
@@ -1008,11 +1016,11 @@ fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
 }
 
 /// note that `longest_line` is the longest in *bytes*! which only serves
-/// as a _heuristic_ for the longest line.
+/// as a _heuristic_ for the longest display line.
 /// to actually get the line with the largest display length we need to
 /// do all the Font work, because line length depends on the sizes of the
 /// glyphs, not amount of bytes. this is true even for ASCII only `str`s,
-/// for e.g. with a non-monospaced font, a line of 100 'i's will be shorted
+/// for e.g. with a non-monospaced font, a line of 100 'i's will be shorter
 /// then a line of 50 'M's
 fn findTextLineInfo(str: []const u8) struct {
     line_count: usize,
@@ -1331,10 +1339,6 @@ pub const NodeTable = struct {
 
 pub const PRNG = struct {
     state: u64,
-
-    pub fn init(seed: u64) PRNG {
-        return .{ .state = seed };
-    }
 
     pub fn next(self: *PRNG) u64 {
         // 3 random primes I generated online

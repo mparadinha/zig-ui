@@ -28,6 +28,14 @@ pub fn spacer(ui: *UI, axis: Axis, size: Size) void {
     _ = ui.addNode(.{ .no_id = true }, "", .{ .size = sizes });
 }
 
+pub fn shape(ui: *UI, init_args: anytype) void {
+    _ = ui.addNode(.{
+        .draw_background = true,
+        .draw_border = @hasField(@TypeOf(init_args), "border_color"),
+        .no_id = true,
+    }, "", init_args);
+}
+
 pub fn label(ui: *UI, str: []const u8) void {
     _ = ui.addNode(.{
         .no_id = true,

@@ -264,10 +264,23 @@ fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
                 },
             }
         } else {
-            switch (axis) {
-                .x => child_node.calc_rel_pos[axis_idx] = start_rel_pos,
-                .y => child_node.calc_rel_pos[axis_idx] = start_rel_pos - child_node.calc_size[axis_idx],
-            }
+            const parent_size = node.calc_size[axis_idx];
+            const child_size = child_node.calc_size[axis_idx];
+            child_node.calc_rel_pos[axis_idx] = start_rel_pos;
+            child_node.calc_rel_pos[axis_idx] += switch (axis) {
+                .x => switch (child_node.alignment) {
+                    .start => 0,
+                    .center => blk: {
+                        break :blk (parent_size - child_size) / 2;
+                    },
+                    .end => parent_size - child_size,
+                },
+                .y => -switch (child_node.alignment) {
+                    .start => child_size,
+                    .center => (parent_size / 2) + (child_size / 2),
+                    .end => parent_size,
+                },
+            };
         }
     }
 

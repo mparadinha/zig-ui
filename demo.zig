@@ -1,18 +1,16 @@
 const std = @import("std");
 const zig_ui = @import("zig-ui");
-const vec4 = zig_ui.vec4; // just `@Vector(4, f32)`, exported for convience
+const vec2 = zig_ui.vec2; // just `@Vector(2, f32)`, exported for convience
+const vec4 = zig_ui.vec4;
 const gl = zig_ui.gl; // we also export our loaded gl functions if you want to use them
 const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
 const UI = zig_ui.UI;
-const Size = UI.Size;
 
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
-    var width: u32 = 1400;
-    var height: u32 = 800;
-    var window = try Window.init(allocator, width, height, "window title");
+    var window = try Window.init(allocator, 1400, 800, "window title");
     window.finishSetup();
     defer window.deinit();
 
@@ -27,15 +25,13 @@ pub fn main() !void {
     var last_time: f32 = @floatCast(glfw.getTime());
     while (!window.shouldClose()) {
         // grab all window/input information we need for this frame
-        const framebuf_size = window.getFramebufferSize();
-        width = framebuf_size[0];
-        height = framebuf_size[1];
         const cur_time: f32 = @floatCast(glfw.getTime());
         const dt = cur_time - last_time;
         last_time = cur_time;
         const mouse_pos = window.getMousePos();
+        const fbsize = window.getFramebufferSize();
 
-        try ui.startBuild(width, height, mouse_pos, &window.event_queue, &window);
+        try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, dt, &demo);
         ui.endBuild(dt);
 
@@ -71,7 +67,51 @@ fn showDemo(
     ui.pushParent(demo_p);
     defer ui.popParentAssert(demo_p);
 
-    const use_child_size = Size.fillByChildren(1, 1);
+    const use_child_size = UI.Size.fillByChildren(1, 1);
+
+    ui.label("Labels are for blocks of text with no interactivity.");
+    ui.labelBox("You can use `labelBox` instead, if you want a background/borders");
+    ui.labelBox(
+        \\If the label text has newlines ('\n') in it, like this:
+        \\then it will take up the necessary vertical space.
+    );
+
+    ui.spacer(.y, UI.Size.pixels(2, 1));
+    ui.shape(.{
+        .bg_color = vec4{ 1, 1, 1, 1 },
+        .size = [2]UI.Size{ UI.Size.percent(0.9, 1), UI.Size.pixels(4, 1) },
+        .corner_radii = [4]f32{ 2, 2, 2, 2 },
+        .padding = vec2{ 5, 5 },
+    });
+    ui.spacer(.y, UI.Size.pixels(2, 1));
+
+    ui.label("Each node alignment can specify it's alignment relative to the parent:");
+    {
+        const sides = ui.pushLayoutParent(.{ .no_id = true }, "", use_child_size, .x);
+        defer ui.popParentAssert(sides);
+
+        inline for (@typeInfo(UI.Axis).Enum.fields) |axis_field| {
+            const axis: UI.Axis = @enumFromInt(axis_field.value);
+
+            const block_size = [2]UI.Size{ UI.Size.children(1), UI.Size.pixels(150, 1) };
+            const p = ui.pushLayoutParent(.{ .no_id = true, .draw_border = true }, "", block_size, .y);
+            defer ui.popParentAssert(p);
+
+            ui.labelF("when the `layout_axis=UI.Axis.{s}`", .{axis_field.name});
+            const align_p_size = switch (axis) {
+                .x => [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) },
+                .y => [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) },
+            };
+            const align_p = ui.pushLayoutParent(.{ .no_id = true }, "", align_p_size, axis);
+            defer ui.popParentAssert(align_p);
+
+            inline for (@typeInfo(UI.Alignment).Enum.fields) |alignment_field| {
+                const alignment: UI.Alignment = @enumFromInt(alignment_field.value);
+                ui.pushTmpStyle(.{ .alignment = alignment });
+                ui.labelBoxF("UI.Alignment.{s}", .{alignment_field.name});
+            }
+        }
+    }
 
     if (ui.toggleButton("Color pickers:", true).toggled) {
         const sides = ui.pushLayoutParent(.{ .no_id = true, .draw_border = true }, "", use_child_size, .x);
@@ -82,7 +122,7 @@ fn showDemo(
             ui.label("demo background color");
             ui.colorPicker("demo bg color", &state.demo_window_bg_color);
         }
-        ui.spacer(.x, Size.pixels(10, 1));
+        ui.spacer(.x, UI.Size.pixels(10, 1));
         {
             const p = ui.pushLayoutParent(.{ .no_id = true }, "", use_child_size, .y);
             defer ui.popParentAssert(p);
@@ -95,9 +135,9 @@ fn showDemo(
 
     const choices = [_][]const u8{ "Choice A", "Choice B", "Choice C", "Choice D", "Choice E", "Choice F" };
     ui.labelF("Current choice: {s}", .{choices[state.listbox_idx]});
-    _ = ui.listBox("listbox_test", .{ Size.children(1), Size.pixels(80, 1) }, &choices, &state.listbox_idx);
+    _ = ui.listBox("listbox_test", .{ UI.Size.children(1), UI.Size.pixels(80, 1) }, &choices, &state.listbox_idx);
     ui.label("Drop down list:");
-    _ = ui.dropDownList("dropdownlist_test", .{ Size.children(1), Size.pixels(80, 1) }, &choices, &state.listbox_idx);
+    _ = ui.dropDownList("dropdownlist_test", .{ UI.Size.children(1), UI.Size.pixels(80, 1) }, &choices, &state.listbox_idx);
 
     if (ui.text("Some text with a tooltip").hovering) {
         ui.startTooltip(null);
@@ -127,7 +167,7 @@ fn showDemo(
     if (state.debug_stats) {
         const stats_window = ui.startWindow(
             "debug stats window",
-            Size.fillByChildren(1, 1),
+            UI.Size.fillByChildren(1, 1),
             UI.RelativePlacement.match(.top_right),
         );
         defer ui.endWindow(stats_window);
