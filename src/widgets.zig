@@ -36,6 +36,23 @@ pub fn shape(ui: *UI, init_args: anytype) void {
     }, "", init_args);
 }
 
+pub fn box(ui: *UI, rect: UI.Rect, init_args: anytype) void {
+    const node = ui.addNode(.{
+        .draw_background = true,
+        .draw_border = @hasField(@TypeOf(init_args), "border_color"),
+        .floating_x = true,
+        .floating_y = true,
+        .no_id = true,
+    }, "", init_args);
+    if (@hasField(@TypeOf(init_args), "size"))
+        @compileError("redundant `size` field in `init_args`. use `rect` argument instead");
+    if (@hasField(@TypeOf(init_args), "rel_pos"))
+        @compileError("redundant `rel_pos` field in `init_args`. use `rect` argument instead");
+    const size = rect.size();
+    node.size = UI.Size.exact(.pixels, size[0], size[1]);
+    node.rel_pos = UI.RelativePlacement.simple(rect.min);
+}
+
 pub fn label(ui: *UI, str: []const u8) void {
     _ = ui.addNode(.{
         .no_id = true,
@@ -328,7 +345,7 @@ pub fn startCtxMenu(ui: *UI, pos: ?RelativePlacement) void {
         .draw_background = true,
         .floating_x = true,
         .floating_y = true,
-    }, "INTERNAL_CTX_MENU_ROOT_NODE", .{
+    }, "INTERNAL_CTX_MENU_ROOT", .{
         .size = [2]Size{ Size.children(1), Size.children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
@@ -339,11 +356,11 @@ pub fn startCtxMenu(ui: *UI, pos: ?RelativePlacement) void {
         root.rel_pos = RelativePlacement.absolute(.{ .top_left = ui.mouse_pos });
 
     ui.pushParent(root);
-    ui.ctx_menu_root_node = root;
+    ui.ctx_menu_root = root;
 }
 
 pub fn endCtxMenu(ui: *UI) void {
-    ui.popParentAssert(ui.ctx_menu_root_node.?);
+    ui.popParentAssert(ui.ctx_menu_root.?);
 }
 
 pub fn startTooltip(ui: *UI, pos: ?RelativePlacement) void {
@@ -358,18 +375,18 @@ pub fn startTooltip(ui: *UI, pos: ?RelativePlacement) void {
         .draw_background = true,
         .floating_x = true,
         .floating_y = true,
-    }, "INTERNAL_TOOLTIP_ROOT_NODE", .{
+    }, "INTERNAL_TOOLTIP_ROOT", .{
         .size = [2]Size{ Size.children(1), Size.children(1) },
         .bg_color = vec4{ 0, 0, 0, 0.75 },
         .corner_radii = vec4{ 4, 4, 4, 4 },
         .rel_pos = pos orelse default_pos,
     });
     ui.pushParent(root);
-    ui.tooltip_root_node = root;
+    ui.tooltip_root = root;
 }
 
 pub fn endTooltip(ui: *UI) void {
-    ui.popParentAssert(ui.tooltip_root_node.?);
+    ui.popParentAssert(ui.tooltip_root.?);
 }
 
 pub fn startWindow(
@@ -636,6 +653,7 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
     return sig;
 }
 
+const color_picker_cursor_radius = 10;
 pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     const square_px_size = 225; // 225/6 = 37.5 which is nice to avoid gaps in the hue bar nodes
     const square_size = Size.exact(.pixels, square_px_size, square_px_size);
@@ -650,7 +668,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     }, "", hash, .{
         .size = Size.fillByChildren(1, 1),
         .layout_axis = .x,
-        .padding = vec2{ 5, 5 },
+        .inner_padding = @as(vec2, @splat(color_picker_cursor_radius)),
     });
     ui.pushParent(background_node);
     defer ui.popParentAssert(background_node);
@@ -676,7 +694,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                 try shader_inputs.append(rect);
                 { // circle cursor
                     const center = node.rect.min + vec2{ hue[1], hue[2] } * node.rect.size();
-                    const radius: f32 = 10;
+                    const radius: f32 = color_picker_cursor_radius;
                     const radius_vec: vec2 = @splat(radius);
                     rect.top_left_color = @as(vec4, @splat(1));
                     rect.btm_left_color = @as(vec4, @splat(1));

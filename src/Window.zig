@@ -394,36 +394,44 @@ pub const EventQueue = struct {
     }
 
     pub fn match(self: *EventQueue, comptime ev_type: EventTag, match_content: anytype) ?usize {
-        const T = @TypeOf(match_content);
         const Payload = EventPayload(ev_type);
+        const Match = @TypeOf(match_content);
+        if (Payload == void and Match != void)
+            @compileError("expected void but `match_content` is " ++ @typeName(Match));
 
-        if (@typeInfo(Payload) == .Struct) {
-            if (@typeInfo(T) != .Struct) @compileError("`match_content` must be a Struct, not " ++ @typeName(T));
-        } else {
-            if (T != Payload and T != void)
-                @compileError(@tagName(ev_type) ++ " has type " ++ @typeName(Payload) ++ " not " ++ @typeName(T));
-        }
-
-        ev_loop: for (self.events.items, 0..) |ev, i| {
+        for (self.events.items, 0..) |ev, i| {
             if (ev != ev_type) continue;
-            if (T == void) return i;
+            if (Payload == void) return i;
 
             const ev_payload: Payload = ev.payload(ev_type);
-            if (@typeInfo(Payload) == .Struct) {
-                inline for (@typeInfo(T).Struct.fields) |field| {
-                    const name = field.name;
-                    if (!@hasField(Payload, name))
-                        @compileError(@typeName(T) ++ "has no field named " ++ name);
-                    if (@field(ev_payload, name) != @field(match_content, name))
-                        continue :ev_loop;
-                }
-            } else {
-                if (ev_payload != match_content) continue :ev_loop;
-            }
-            return i;
+            if (matchAnyType(ev_payload, match_content))
+                return i
+            else
+                continue;
         }
 
         return null;
+    }
+
+    fn matchAnyType(target: anytype, match_content: anytype) bool {
+        const Target = @TypeOf(target);
+        const Match = @TypeOf(match_content);
+
+        if (@typeInfo(Target) == .Struct) {
+            if (@typeInfo(Match) != .Struct)
+                @compileError("trying to match " ++ @typeName(Target) ++ " but `match_content` is " ++ @typeName(Match));
+
+            inline for (@typeInfo(Match).Struct.fields) |field| {
+                if (!@hasField(Target, field.name))
+                    @compileError(@typeName(Target) ++ " has no field `" ++ field.name ++ "`");
+                const target_field = @field(target, field.name);
+                const match_field = @field(match_content, field.name);
+                if (!matchAnyType(target_field, match_field)) return false;
+            }
+            return true;
+        } else {
+            return target == match_content;
+        }
     }
 
     pub fn append(self: *EventQueue, new: InputEvent) !void {

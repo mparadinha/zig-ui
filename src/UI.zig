@@ -48,9 +48,9 @@ base_style: Style,
 parent_stack: Stack(*Node),
 style_stack: Stack(Style),
 auto_pop_style: bool,
-root_node: ?*Node,
-ctx_menu_root_node: ?*Node,
-tooltip_root_node: ?*Node,
+root: ?*Node,
+ctx_menu_root: ?*Node,
+tooltip_root: ?*Node,
 window_roots: std.ArrayList(*Node),
 screen_size: vec2,
 mouse_pos: vec2, // in pixels
@@ -128,9 +128,9 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
         .parent_stack = Stack(*Node).init(allocator),
         .style_stack = Stack(Style).init(allocator),
         .auto_pop_style = false,
-        .root_node = null,
-        .tooltip_root_node = null,
-        .ctx_menu_root_node = null,
+        .root = null,
+        .tooltip_root = null,
+        .ctx_menu_root = null,
         .window_roots = std.ArrayList(*Node).init(allocator),
         .screen_size = undefined,
         .mouse_pos = undefined,
@@ -215,7 +215,8 @@ pub const Node = struct {
     custom_draw_fn: ?CustomDrawFn,
     custom_draw_ctx_as_bytes: ?[]const u8, // gets copied during `addNode`
     scroll_multiplier: vec2,
-    padding: vec2, // only applies to node without a `display_string`; padding for those is calculated in `textPadding`
+    inner_padding: vec2,
+    outer_padding: vec2,
 
     // per-frame additional info
     first_time: bool,
@@ -278,7 +279,8 @@ pub const Style = struct {
     custom_draw_fn: ?CustomDrawFn = null,
     custom_draw_ctx_as_bytes: ?[]const u8 = null,
     scroll_multiplier: vec2 = @splat(18 * 2),
-    padding: vec2 = vec2{ 0, 0 },
+    inner_padding: vec2 = vec2{ 0, 0 },
+    outer_padding: vec2 = vec2{ 0, 0 },
 };
 
 pub const Size = union(enum) {
@@ -355,6 +357,11 @@ pub const Size = union(enum) {
 pub const Rect = struct {
     min: vec2,
     max: vec2,
+
+    pub fn at(placement: Placement, rect_size: vec2) Rect {
+        const btm_left = placement.convertTo(.btm_left, rect_size);
+        return .{ .min = btm_left, .max = btm_left + rect_size };
+    }
 
     pub fn size(self: Rect) vec2 {
         return self.max - self.min;
@@ -503,7 +510,7 @@ pub const Signal = struct {
 pub fn addNode(self: *UI, flags: Flags, string: []const u8, init_args: anytype) *Node {
     const node = self.addNodeRaw(flags, string, init_args) catch |e| blk: {
         self.setErrorInfo(@errorReturnTrace(), @errorName(e));
-        break :blk self.root_node.?;
+        break :blk self.root.?;
     };
     return node;
 }
@@ -516,7 +523,7 @@ pub fn addNodeF(self: *UI, flags: Flags, comptime fmt: []const u8, args: anytype
 pub fn addNodeStrings(self: *UI, flags: Flags, display_string: []const u8, hash_string: []const u8, init_args: anytype) *Node {
     const node = self.addNodeRawStrings(flags, display_string, hash_string, init_args) catch |e| blk: {
         self.setErrorInfo(@errorReturnTrace(), @errorName(e));
-        break :blk self.root_node.?;
+        break :blk self.root.?;
     };
     return node;
 }
@@ -603,9 +610,7 @@ pub fn addNodeRawStrings(
         const field_name = field_type_info.name;
         @field(node, field_name) = @field(style, field_name);
     }
-    // padding for nodes with text is done with `textPadding`
-    // TODO: this should probably be an error
-    if (node.display_string.len != 0) node.padding = vec2{ 0, 0 };
+    node.inner_padding = if (node.flags.draw_text) self.textPadding(node) else vec2{ 0, 0 };
 
     node.first_time = !lookup_result.found_existing;
 
@@ -713,10 +718,10 @@ pub fn startBuild(
     self.hot_node_key = null;
     // get the signal in the reverse order that we render in (if a node is on top
     // of another, the top one should get the inputs, no the bottom one)
-    if (self.tooltip_root_node) |node| try self.computeSignalsForTree(node);
-    if (self.ctx_menu_root_node) |node| try self.computeSignalsForTree(node);
+    if (self.tooltip_root) |node| try self.computeSignalsForTree(node);
+    if (self.ctx_menu_root) |node| try self.computeSignalsForTree(node);
     for (self.window_roots.items) |node| try self.computeSignalsForTree(node);
-    if (self.root_node) |node| try self.computeSignalsForTree(node);
+    if (self.root) |node| try self.computeSignalsForTree(node);
 
     // clear out the whole arena
     _ = self.build_arena.reset(.free_all);
@@ -746,15 +751,15 @@ pub fn startBuild(
     self.style_stack.clear();
     try self.style_stack.push(self.base_style);
 
-    self.root_node = try self.addNodeRaw(.{ .clip_children = true }, "###INTERNAL_ROOT_NODE", .{
+    self.root = try self.addNodeRaw(.{ .clip_children = true }, "###INTERNAL_ROOT", .{
         .size = Size.exact(.pixels, screen_size[0], screen_size[1]),
         .rect = Rect{ .min = vec2{ 0, 0 }, .max = screen_size },
     });
-    try self.parent_stack.push(self.root_node.?);
+    try self.parent_stack.push(self.root.?);
 
     self.window_roots.clearRetainingCapacity();
-    self.ctx_menu_root_node = null;
-    self.tooltip_root_node = null;
+    self.ctx_menu_root = null;
+    self.tooltip_root = null;
 
     self.first_error_trace = null;
 
@@ -780,7 +785,7 @@ pub fn endBuild(self: *UI, dt: f32) void {
 
     _ = self.style_stack.pop().?;
     const parent = self.parent_stack.pop().?;
-    if (parent != self.root_node.?)
+    if (parent != self.root.?)
         @panic("only the root node should remain in the parent_stack\n");
 
     std.debug.assert(self.parent_stack.len() == 0);
@@ -812,16 +817,16 @@ pub fn endBuild(self: *UI, dt: f32) void {
     }
 
     // do all the layout
-    self.layoutTree(self.root_node.?);
+    self.layoutTree(self.root.?);
     for (self.window_roots.items) |node| self.layoutTree(node);
-    if (self.ctx_menu_root_node) |node| self.layoutTree(node);
-    if (self.tooltip_root_node) |node| self.layoutTree(node);
+    if (self.ctx_menu_root) |node| self.layoutTree(node);
+    if (self.tooltip_root) |node| self.layoutTree(node);
 
     self.frame_idx += 1;
 }
 
 fn computeSignalsForTree(self: *UI, root: *Node) !void {
-    var node_iterator = ReverseRenderOrderNodeIterator.init(root);
+    var node_iterator = InputOrderNodeIterator.init(root);
     while (node_iterator.next()) |node| {
         node.signal = try self.computeNodeSignal(node);
     }
@@ -958,10 +963,11 @@ pub fn textPadding(_: *UI, node: *Node) vec2 {
 
 /// calculate the origin of a node's text box in absolute coordinates
 pub fn textPosFromNode(self: *UI, node: *Node) vec2 {
+    _ = self;
     const node_size = node.rect.size();
     const text_rect = node.text_rect;
     const text_size = text_rect.size();
-    const text_padd = self.textPadding(node);
+    const text_padd = node.inner_padding;
 
     // offset from left-side of node rect to start (i.e. left) of text box
     const rel_text_x = switch (node.text_align) {
@@ -1165,7 +1171,7 @@ pub fn hashPartOfString(string: []const u8) []const u8 {
 //    1     4      |    5     2
 //   ┌┴┐   ┌┴┐     |   ┌┴┐   ┌┴┐
 //   2 3   5 6     |   4 3   1 0
-pub const ReverseRenderOrderNodeIterator = struct {
+pub const InputOrderNodeIterator = struct {
     cur_node: *Node,
     reached_top: bool,
 
@@ -1541,9 +1547,9 @@ pub const DebugView = struct {
 
             for (selected_nodes.items, 0..) |node, idx| {
                 if (idx == self.node_list_idx) {
-                    self.ui.labelBoxF("hash=\"{s}\"", .{node.hash_string});
+                    self.ui.labelBoxF("hash=\"{s}\"", .{node.key});
                 } else {
-                    self.ui.labelF("hash=\"{s}\"", .{node.hash_string});
+                    self.ui.labelF("hash=\"{s}\"", .{node.key});
                 }
             }
         }
@@ -1571,7 +1577,7 @@ pub const DebugView = struct {
                 }
                 switch (field.type) {
                     ?*Node => if (value) |link| {
-                        self.ui.labelF("{s}.hash_string=\"{s}\"", .{ name, link.hash_string });
+                        self.ui.labelF("{s}.hash_string=\"{s}\"", .{ name, link.key });
                     },
                     Flags => {
                         var buf = std.BoundedArray(u8, 1024){};

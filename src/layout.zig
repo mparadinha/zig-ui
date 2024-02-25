@@ -45,8 +45,9 @@ fn solveFinalPos(self: *UI, node: *Node) void {
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
-fn solveIndependentSizesWorkFn(self: *UI, node: *Node, axis: Axis) void {
+fn solveIndependentSizesWorkFn(_: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
+
     switch (node.size[axis_idx]) {
         .pixels => |pixels| node.calc_size[axis_idx] = pixels.value,
         // this is wrong for percent (the correct one is calculated later) but this gives
@@ -56,16 +57,13 @@ fn solveIndependentSizesWorkFn(self: *UI, node: *Node, axis: Axis) void {
         .text,
         => {
             const text_size = node.text_rect.size();
-            const text_padding = self.textPadding(node)[axis_idx];
-            node.calc_size[axis_idx] = text_size[axis_idx] + 2 * text_padding;
+            node.calc_size[axis_idx] = text_size[axis_idx] + 2 * node.inner_padding[axis_idx];
         },
         else => {},
     }
 }
 
-fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
-    _ = self;
-
+fn solveDownwardDependentWorkFn(_: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
     const is_layout_axis = (axis == node.layout_axis);
 
@@ -74,7 +72,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
             var sum: f32 = 0;
             var child = parent.first;
             while (child) |child_node| : (child = child_node.next) {
-                sum += child_node.calc_size[idx];
+                sum += child_node.calc_size[idx] + 2 * child_node.outer_padding[idx];
             }
             return sum;
         }
@@ -90,7 +88,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
                             break :blk sumChildrenSizes(child_node, idx);
                         }
                     },
-                    else => child_node.calc_size[idx],
+                    else => child_node.calc_size[idx] + 2 * child_node.outer_padding[idx],
                 };
                 max_so_far = @max(max_so_far, child_size);
             }
@@ -105,7 +103,7 @@ fn solveDownwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
             } else {
                 node.calc_size[axis_idx] = child_funcs.maxChildrenSizes(node, axis_idx);
             }
-            node.calc_size[axis_idx] += 2 * node.padding[axis_idx];
+            node.calc_size[axis_idx] += 2 * node.inner_padding[axis_idx];
         },
         else => {},
     }
@@ -116,10 +114,10 @@ fn solveUpwardDependentWorkFn(self: *UI, node: *Node, axis: Axis) void {
     switch (node.size[axis_idx]) {
         .percent => |percent| {
             const parent_size = if (node.parent) |p|
-                p.calc_size - p.padding * vec2{ 2, 2 }
+                p.calc_size - vec2{ 2, 2 } * p.inner_padding
             else
                 self.screen_size;
-            node.calc_size[axis_idx] = parent_size[axis_idx] * percent.value;
+            node.calc_size[axis_idx] = parent_size[axis_idx] * percent.value - 2 * node.outer_padding[axis_idx];
         },
         else => {},
     }
@@ -132,7 +130,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     const is_layout_axis = (axis == node.layout_axis);
     const arena = self.build_arena.allocator();
 
-    const available_size = node.calc_size - node.padding * vec2{ 2, 2 };
+    const available_size = node.calc_size - vec2{ 2, 2 } * node.inner_padding;
 
     // collect sizing information about children
     var total_children_size: f32 = 0;
@@ -151,7 +149,7 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
         }) continue;
 
         const strictness = child_node.size[axis_idx].getStrictness();
-        const child_size = child_node.calc_size[axis_idx];
+        const child_size = child_node.calc_size[axis_idx] + 2 * child_node.outer_padding[axis_idx];
 
         total_children_size += child_size;
         max_child_size = @max(max_child_size, child_size);
@@ -171,11 +169,12 @@ fn solveViolationsWorkFn(self: *UI, node: *Node, axis: Axis) void {
     // trying to shrink other children with strictness > 0
     const zero_strict_remove_amount = @min(overflow, zero_strict_take_budget);
     for (zero_strict_children.items) |z_child| {
+        const z_child_size = z_child.calc_size[axis_idx];
         if (is_layout_axis) {
-            const z_child_percent = z_child.calc_size[axis_idx] / zero_strict_take_budget;
+            const z_child_percent = z_child_size / zero_strict_take_budget;
             z_child.calc_size[axis_idx] -= zero_strict_remove_amount * z_child_percent;
         } else {
-            const extra_size = z_child.calc_size[axis_idx] - available_size[axis_idx];
+            const extra_size = z_child_size - available_size[axis_idx];
             z_child.calc_size[axis_idx] -= @max(0, extra_size);
         }
     }
@@ -231,8 +230,8 @@ fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
 
     // start layout at the top left
     var start_rel_pos: f32 = switch (axis) {
-        .x => node.padding[0],
-        .y => node.calc_size[1] - node.padding[1],
+        .x => node.inner_padding[0],
+        .y => node.calc_size[1] - node.inner_padding[1],
     };
     // when `scroll_children` is enabled start layout at an offset
     if (is_scrollable_axis) start_rel_pos += node.scroll_offset[axis_idx];
@@ -252,7 +251,7 @@ fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
         }
 
         if (is_layout_axis) {
-            const rel_pos_advance = child_node.calc_size[axis_idx];
+            const rel_pos_advance = child_node.calc_size[axis_idx] + 2 * child_node.outer_padding[axis_idx];
             switch (axis) {
                 .x => {
                     child_node.calc_rel_pos[axis_idx] = rel_pos;
@@ -264,9 +263,10 @@ fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
                 },
             }
         } else {
-            const parent_size = node.calc_size[axis_idx];
-            const child_size = child_node.calc_size[axis_idx];
             child_node.calc_rel_pos[axis_idx] = start_rel_pos;
+
+            const parent_size = node.calc_size[axis_idx] + 2 * node.inner_padding[axis_idx];
+            const child_size = child_node.calc_size[axis_idx] + 2 * child_node.outer_padding[axis_idx];
             child_node.calc_rel_pos[axis_idx] += switch (axis) {
                 .x => switch (child_node.alignment) {
                     .start => 0,
@@ -287,7 +287,7 @@ fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
     // calculate the final screen pixel rect
     child = node.first;
     while (child) |child_node| : (child = child_node.next) {
-        child_node.rect.min[axis_idx] = node.rect.min[axis_idx] + child_node.calc_rel_pos[axis_idx];
+        child_node.rect.min[axis_idx] = node.rect.min[axis_idx] + child_node.calc_rel_pos[axis_idx] + child_node.outer_padding[axis_idx];
         child_node.rect.max[axis_idx] = child_node.rect.min[axis_idx] + child_node.calc_size[axis_idx];
         // propagate the clipping to children
         child_node.clip_rect = if (node.flags.clip_children) node.rect else node.clip_rect;

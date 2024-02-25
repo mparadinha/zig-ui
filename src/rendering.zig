@@ -56,10 +56,10 @@ pub fn render(self: *UI) !void {
     for (self.node_table.values()) |node| estimated_rect_count += node.display_string.len;
     var shader_inputs = try std.ArrayList(ShaderInput).initCapacity(arena, estimated_rect_count);
 
-    try setupTreeForRender(self, &shader_inputs, self.root_node.?);
+    try setupTreeForRender(self, &shader_inputs, self.root.?);
     for (self.window_roots.items) |node| try setupTreeForRender(self, &shader_inputs, node);
-    if (self.ctx_menu_root_node) |node| try setupTreeForRender(self, &shader_inputs, node);
-    if (self.tooltip_root_node) |node| try setupTreeForRender(self, &shader_inputs, node);
+    if (self.ctx_menu_root) |node| try setupTreeForRender(self, &shader_inputs, node);
+    if (self.tooltip_root) |node| try setupTreeForRender(self, &shader_inputs, node);
 
     // create vertex buffer
     var inputs_vao: u32 = 0;

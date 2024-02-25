@@ -32,7 +32,7 @@ pub fn main() !void {
         const fbsize = window.getFramebufferSize();
 
         try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
-        try showDemo(allocator, &ui, dt, &demo);
+        try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
         ui.endBuild(dt);
 
         window.clear(demo.clear_color);
@@ -48,11 +48,14 @@ const DemoState = struct {
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
     debug_stats: bool = true,
     listbox_idx: usize = 0,
+    measuring_square_start: ?vec2 = null,
 };
 
 fn showDemo(
     _: std.mem.Allocator,
     ui: *UI,
+    mouse_pos: vec2,
+    event_q: *Window.EventQueue,
     dt: f32,
     state: *DemoState,
 ) !void {
@@ -76,14 +79,13 @@ fn showDemo(
         \\then it will take up the necessary vertical space.
     );
 
-    ui.spacer(.y, UI.Size.pixels(2, 1));
     ui.shape(.{
         .bg_color = vec4{ 1, 1, 1, 1 },
-        .size = [2]UI.Size{ UI.Size.percent(0.9, 1), UI.Size.pixels(4, 1) },
+        .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.pixels(4, 1) },
         .corner_radii = [4]f32{ 2, 2, 2, 2 },
-        .padding = vec2{ 5, 5 },
+        .outer_padding = vec2{ 10, 5 },
+        .alignment = .center,
     });
-    ui.spacer(.y, UI.Size.pixels(2, 1));
 
     ui.label("Each node alignment can specify it's alignment relative to the parent:");
     {
@@ -93,16 +95,15 @@ fn showDemo(
         inline for (@typeInfo(UI.Axis).Enum.fields) |axis_field| {
             const axis: UI.Axis = @enumFromInt(axis_field.value);
 
-            const block_size = [2]UI.Size{ UI.Size.children(1), UI.Size.pixels(150, 1) };
-            const p = ui.pushLayoutParent(.{ .no_id = true, .draw_border = true }, "", block_size, .y);
+            const p = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.fillByChildren(1, 1), .y);
             defer ui.popParentAssert(p);
 
-            ui.labelF("when the `layout_axis=UI.Axis.{s}`", .{axis_field.name});
+            ui.labelF("when the parent's `layout_axis` is `UI.Axis.{s}`:", .{axis_field.name});
             const align_p_size = switch (axis) {
-                .x => [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) },
-                .y => [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) },
+                .x => [2]UI.Size{ UI.Size.children(1), UI.Size.pixels(100, 0) },
+                .y => [2]UI.Size{ UI.Size.pixels(300, 0), UI.Size.children(1) },
             };
-            const align_p = ui.pushLayoutParent(.{ .no_id = true }, "", align_p_size, axis);
+            const align_p = ui.pushLayoutParent(.{ .draw_border = true, .no_id = true }, "", align_p_size, axis);
             defer ui.popParentAssert(align_p);
 
             inline for (@typeInfo(UI.Alignment).Enum.fields) |alignment_field| {
@@ -160,7 +161,7 @@ fn showDemo(
         const path = "ui_main_tree.dot";
         const dump_file = try std.fs.cwd().createFile(path, .{});
         defer dump_file.close();
-        try ui.dumpNodeTreeGraph(ui.root_node.?, dump_file);
+        try ui.dumpNodeTreeGraph(ui.root.?, dump_file);
     }
 
     // show at the end, to get more accurate stats for this frame
@@ -178,5 +179,30 @@ fn showDemo(
         ui.labelF("build_arena capacity: {:.2}", .{
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
         });
+    }
+
+    if (event_q.matchAndRemove(.MouseDown, .{ .button = .middle })) |_|
+        state.measuring_square_start = mouse_pos;
+    if (event_q.matchAndRemove(.MouseUp, .{ .button = .middle })) |_|
+        state.measuring_square_start = null;
+    if (state.measuring_square_start) |start_pos| {
+        const rect = UI.Rect{
+            .min = @min(start_pos, mouse_pos),
+            .max = @max(start_pos, mouse_pos),
+        };
+        const size = rect.size();
+        _ = ui.addNode(.{
+            .draw_background = true,
+            .floating_x = true,
+            .floating_y = true,
+            .no_id = true,
+        }, "", .{
+            .bg_color = vec4{ 1, 1, 1, 0.3 },
+            .size = UI.Size.exact(.pixels, size[0], size[1]),
+            .rel_pos = UI.RelativePlacement.simple(rect.min),
+        });
+        ui.startTooltip(null);
+        ui.labelF("{d}x{d}", .{ size[0], size[1] });
+        ui.endTooltip();
     }
 }
