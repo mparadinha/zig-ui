@@ -389,6 +389,7 @@ pub fn endTooltip(ui: *UI) void {
     ui.popParentAssert(ui.tooltip_root.?);
 }
 
+/// `pos` is relative to actual the full screen, not any other Node
 pub fn startWindow(
     ui: *UI,
     hash: []const u8,
@@ -396,6 +397,10 @@ pub fn startWindow(
     pos: RelativePlacement,
 ) *Node {
     const window_root = ui.addNodeAsRoot(.{
+        // set this interaction flag to consume inputs that would go *through* the window
+        // and into nodes that are underneath the window
+        .clickable = true,
+
         .clip_children = true,
         .draw_border = true,
         .draw_background = true,

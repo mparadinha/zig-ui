@@ -49,6 +49,7 @@ const DemoState = struct {
     debug_stats: bool = true,
     listbox_idx: usize = 0,
     measuring_square_start: ?vec2 = null,
+    show_window_test: bool = false,
 };
 
 fn showDemo(
@@ -157,28 +158,23 @@ fn showDemo(
 
     ui.label("Valid unicode, but not present in default font (should render the `missing char` box): \u{1b83}");
 
+    if (state.show_window_test) {
+        const window_root = ui.startWindow(
+            "test_window",
+            UI.Size.exact(.pixels, 500, 500),
+            UI.RelativePlacement{ .target = .center, .anchor = .center },
+        );
+        defer ui.endWindow(window_root);
+        if (ui.button("Close test window").clicked) state.show_window_test = false;
+    } else {
+        if (ui.button("Open test window").clicked) state.show_window_test = true;
+    }
+
     if (ui.button("Dump root node tree to `ui_main_tree.dot`").clicked) {
         const path = "ui_main_tree.dot";
         const dump_file = try std.fs.cwd().createFile(path, .{});
         defer dump_file.close();
         try ui.dumpNodeTreeGraph(ui.root.?, dump_file);
-    }
-
-    // show at the end, to get more accurate stats for this frame
-    if (state.debug_stats) {
-        const stats_window = ui.startWindow(
-            "debug stats window",
-            UI.Size.fillByChildren(1, 1),
-            UI.RelativePlacement.match(.top_right),
-        );
-        defer ui.endWindow(stats_window);
-        ui.labelF("mouse_pos={d}", .{ui.mouse_pos});
-        ui.labelF("frame_idx={d}", .{ui.frame_idx});
-        ui.labelF("{d:4.2} fps", .{1 / dt});
-        ui.labelF("# of nodes: {}", .{ui.node_table.count()});
-        ui.labelF("build_arena capacity: {:.2}", .{
-            std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
-        });
     }
 
     if (event_q.matchAndRemove(.MouseDown, .{ .button = .middle })) |_|
@@ -204,5 +200,22 @@ fn showDemo(
         ui.startTooltip(null);
         ui.labelF("{d}x{d}", .{ size[0], size[1] });
         ui.endTooltip();
+    }
+
+    // show at the end, to get more accurate stats for this frame
+    if (state.debug_stats) {
+        const stats_window = ui.startWindow(
+            "debug stats window",
+            UI.Size.fillByChildren(1, 1),
+            UI.RelativePlacement.match(.top_right),
+        );
+        defer ui.endWindow(stats_window);
+        ui.labelF("mouse_pos={d}", .{ui.mouse_pos});
+        ui.labelF("frame_idx={d}", .{ui.frame_idx});
+        ui.labelF("{d:4.2} fps", .{1 / dt});
+        ui.labelF("# of nodes: {}", .{ui.node_table.count()});
+        ui.labelF("build_arena capacity: {:.2}", .{
+            std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
+        });
     }
 }
