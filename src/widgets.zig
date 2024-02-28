@@ -219,7 +219,9 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
             handle_radius,
             @max(handle_radius, scroll_zone.rect.size()[0] - handle_radius),
         );
-        const percentage = clamp(scroll_zone.signal.mouse_pos[0] / scroll_zone.rect.size()[0], 0, 1);
+        const scroll_zone_size = scroll_zone.rect.size()[0] - 2 * handle_radius;
+        const scroll_zone_pos = scroll_zone.signal.mouse_pos[0] - handle_radius;
+        const percentage = clamp(scroll_zone_pos / scroll_zone_size, 0, 1);
         value_ptr.* = min + (max - min) * percentage;
     }
 
