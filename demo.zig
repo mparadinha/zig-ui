@@ -8,7 +8,9 @@ const Window = zig_ui.Window;
 const UI = zig_ui.UI;
 
 pub fn main() !void {
-    const allocator = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(!gpa.detectLeaks());
+    const allocator = gpa.allocator();
 
     var window = try Window.init(allocator, 1400, 800, "window title");
     window.finishSetup();

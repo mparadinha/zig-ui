@@ -1301,8 +1301,14 @@ pub const NodeTable = struct {
     pub fn remove(self: *NodeTable, key: K) void {
         const hash = self.getKeyHash(key);
         if (self.ptr_map.fetchSwapRemove(hash)) |pair| {
-            self.allocator.destroy(pair.value);
+            self.allocator.destroy(pair.value.*);
         }
+    }
+
+    pub fn removeAt(self: *NodeTable, idx: usize) void {
+        const node_ptr = self.ptr_map.values()[idx];
+        self.allocator.destroy(node_ptr);
+        self.ptr_map.swapRemoveAt(idx);
     }
 
     pub fn hasKey(self: *NodeTable, key: K) bool {
@@ -1337,7 +1343,7 @@ pub const NodeTable = struct {
 
         pub fn removeCurrent(it: *ValueIterator) !void {
             if (it.iter.index > 0) it.iter.index -= 1;
-            it.table.ptr_map.swapRemoveAt(it.iter.index);
+            it.table.removeAt(it.iter.index);
             it.iter.len -= 1;
         }
     };
