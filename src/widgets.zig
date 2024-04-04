@@ -229,23 +229,31 @@ pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f3
 }
 
 pub fn checkBox(ui: *UI, str: []const u8, value: *bool) Signal {
+    const hash_str = UI.hashPartOfString(str);
+    const disp_str = UI.displayPartOfString(str);
+
     const p_size = Size.fillByChildren(1, 1);
-    const p = ui.pushLayoutParentF(.{ .draw_background = true }, "{s}_parent", .{str}, p_size, .x);
+    const p = ui.pushLayoutParentF(.{
+        .draw_background = true,
+    }, "{s}_parent", .{hash_str}, p_size, .x);
     defer ui.popParentAssert(p);
 
     const box_icon = if (value.*) Icons.ok else " ";
-    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ box_icon, str });
+    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ box_icon, hash_str });
     if (box_signal.clicked) value.* = !value.*;
 
-    ui.label(str);
+    ui.label(disp_str);
 
     return box_signal;
 }
 
 pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
+    const hash_str = UI.hashPartOfString(str);
+    const disp_str = UI.displayPartOfString(str);
+
     const click_region = ui.pushLayoutParentF(.{
         .toggleable = true,
-    }, "{s}_click_region", .{str}, Size.fillByChildren(1, 1), .x);
+    }, "{s}_click_region", .{hash_str}, Size.fillByChildren(1, 1), .x);
     defer ui.popParentAssert(click_region);
     click_region.cursor_type = .pointing_hand;
     if (click_region.first_time) click_region.toggled = start_open;
@@ -253,7 +261,7 @@ pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
 
     const arrow = if (signal.toggled) Icons.down_open else Icons.right_open;
     ui.iconLabel(arrow);
-    ui.label(str);
+    ui.label(disp_str);
 
     return signal;
 }
