@@ -208,7 +208,7 @@ pub const Shader = struct {
             .geometry => @as(u32, gl.GEOMETRY_SHADER),
             .fragment => @as(u32, gl.FRAGMENT_SHADER),
         };
-        var id: u32 = gl.createShader(gl_shader_type);
+        const id: u32 = gl.createShader(gl_shader_type);
         gl.shaderSource(id, 1, &(&src[0]), &(@as(c_int, @intCast(src.len))));
         gl.compileShader(id);
 

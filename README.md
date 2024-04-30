@@ -5,7 +5,7 @@
 and [Hasen Judi's UI series](https://hasen.substack.com/s/gpu-ui)
 
 ## Install & Build
-Requires [zig-0.11.0](https://ziglang.org/download) compiler.
+Requires [zig-0.12.0](https://ziglang.org/download) compiler.
 
 Add it your `build.zig.zon` file:
 ```zig
@@ -20,14 +20,13 @@ Add it your `build.zig.zon` file:
 ```
 Then in your `build.zig` do:
 ```zig
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{ ... });
     ...
     const zig_ui_dep = b.dependency("zig_ui", .{ .target = target, .optimize = optimize });
     const zig_ui_mod = zig_ui_dep.module("zig-ui");
     exe.linkLibC();
-    exe.addModule("zig-ui", zig_ui_mod);
-    @import("zig_ui").link(zig_ui_dep.builder, exe);
+    exe.root_module.addImport("zig-ui", zig_ui_mod);
     ...
 }
 ```

@@ -3,8 +3,14 @@
     .version = "0.0.1",
     .dependencies = .{
         .mach_glfw = .{
-            .url = "https://pkg.machengine.org/mach-glfw/076b3869cbfd2ccccb6a8c01e4128bb0d7977ebb.tar.gz",
-            .hash = "1220cafbb90ea86d92c07f779e8106e6f5c3d8ab4cc68ddc8d3f80bd4b6079064135",
+            .url = "https://github.com/mparadinha/mach-glfw/archive/refs/heads/0.12.0.tar.gz",
+            .hash = "1220ed9d037a1c80c1dbab379b758437e87b9d52fa2094e9de9ad3be490a84e2ebfc",
         },
+    },
+    .paths = .{
+        "zig_ui.zig",
+        "src",
+        "demo.zig",
+        "LICENSE",
     },
 }

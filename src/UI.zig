@@ -72,33 +72,21 @@ pub const FontOptions = struct {
 // icon font (and this mapping) was generated using fontello.com
 pub const Icons = struct {
     // zig fmt: off
-    pub const cancel        = utf8LitFromCodepoint(59392);
-    pub const th_list       = utf8LitFromCodepoint(59393);
-    pub const search        = utf8LitFromCodepoint(59394);
-    pub const plus_circled  = utf8LitFromCodepoint(59395);
-    pub const cog           = utf8LitFromCodepoint(59396);
-    pub const ok            = utf8LitFromCodepoint(59397);
-    pub const circle        = utf8LitFromCodepoint(61713);
-    pub const up_open       = utf8LitFromCodepoint(59398);
-    pub const right_open    = utf8LitFromCodepoint(59399);
-    pub const left_open     = utf8LitFromCodepoint(59400);
-    pub const down_open     = utf8LitFromCodepoint(59401);
-    pub const plus_squared  = utf8LitFromCodepoint(61694);
-    pub const minus_squared = utf8LitFromCodepoint(61766);
-    pub const plus          = utf8LitFromCodepoint(59402);
+    pub const cancel =        "\u{e800}";
+    pub const th_list =       "\u{e801}";
+    pub const search =        "\u{e802}";
+    pub const plus_circled =  "\u{e803}";
+    pub const cog =           "\u{e804}";
+    pub const ok =            "\u{e805}";
+    pub const circle =        "\u{f111}";
+    pub const up_open =       "\u{e806}";
+    pub const right_open =    "\u{e807}";
+    pub const left_open =     "\u{e808}";
+    pub const down_open =     "\u{e809}";
+    pub const plus_squared =  "\u{f0fe}";
+    pub const minus_squared = "\u{f146}";
+    pub const plus =          "\u{e80a}";
     // zig fmt: on
-
-    fn utf8Len(comptime codepoint: u21) u3 {
-        return std.unicode.utf8CodepointSequenceLength(codepoint) catch unreachable;
-    }
-    fn utf8LitFromCodepoint(comptime codepoint: u21) *const [utf8Len(codepoint):0]u8 {
-        comptime {
-            var buf: [utf8Len(codepoint):0]u8 = undefined;
-            _ = std.unicode.utf8Encode(codepoint, &buf) catch unreachable;
-            buf[buf.len] = 0;
-            return &buf;
-        }
-    }
 };
 
 // call `deinit` to cleanup resources
@@ -583,7 +571,7 @@ pub fn addNodeRawStrings(
     var node = lookup_result.value_ptr;
 
     // link node into the tree
-    var parent = self.parent_stack.top();
+    const parent = self.parent_stack.top();
     node.first = null;
     node.last = null;
     node.next = null;
@@ -847,7 +835,7 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     const focused_key_matches = if (self.focused_node_key) |key| key == node_key else false;
 
     const is_interactive = node.flags.interactive();
-    var is_hot = mouse_is_over and is_interactive;
+    const is_hot = mouse_is_over and is_interactive;
     var is_active = active_key_matches and is_interactive;
     var is_focused = focused_key_matches and is_interactive;
 
@@ -856,7 +844,7 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     const mouse_up_ev = self.events.match(.MouseUp, .{ .button = .left });
     var used_mouse_up_ev = false;
     const enter_down_ev = self.events.match(.KeyDown, .{ .key = .enter });
-    var used_enter_down_ev = false;
+    const used_enter_down_ev = false;
     const enter_up_ev = self.events.match(.KeyUp, .{ .key = .enter });
     var used_enter_up_ev = false;
 
@@ -1034,7 +1022,7 @@ fn findTextLineInfo(str: []const u8) struct {
 } {
     if (str.len == 0) return .{ .line_count = 0, .longest_line = str[0..0] };
 
-    const vec_size = comptime std.simd.suggestVectorSize(u8) orelse 128 / 8;
+    const vec_size = comptime std.simd.suggestVectorLength(u8) orelse 128 / 8;
     const V = @Vector(vec_size, u8);
 
     var line_count: usize = 1;
@@ -1095,7 +1083,7 @@ fn findTextLineInfo(str: []const u8) struct {
 pub fn indexOfNthScalar(slice: []const u8, scalar: u8, nth: usize) ?usize {
     if (nth == 0) return null;
 
-    const vec_size = comptime std.simd.suggestVectorSize(u8) orelse 128 / 8;
+    const vec_size = comptime std.simd.suggestVectorLength(u8) orelse 128 / 8;
     const V = @Vector(vec_size, u8);
 
     var running_count: usize = 0;
@@ -1186,7 +1174,7 @@ pub const InputOrderNodeIterator = struct {
     pub fn next(self: *Self) ?*Node {
         if (self.reached_top) return null;
 
-        var cur_node = self.cur_node;
+        const cur_node = self.cur_node;
         var next_node = @as(?*Node, cur_node);
 
         if (cur_node.prev) |prev| {

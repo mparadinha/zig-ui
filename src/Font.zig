@@ -341,7 +341,7 @@ fn getKerningAdvance(self: *Font, char_pair: [2]u21) !i32 {
 /// optimization for slices that only contains ASCII
 // TODO: fully implement this using SIMD, theres a bunch of papers online on how to do that
 fn utf8Validate(str: []const u8) bool {
-    const vec_size = comptime std.simd.suggestVectorSize(u8) orelse 64 / 8;
+    const vec_size = comptime std.simd.suggestVectorLength(u8) orelse 64 / 8;
     const V = @Vector(vec_size, u8);
     // TODO: make this better
     var chunk_start: usize = 0;
