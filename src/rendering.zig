@@ -235,8 +235,12 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             break :blk res.string;
         };
 
-        const quads = try font.buildQuads(self.allocator, display_text, node.font_size);
-        defer self.allocator.free(quads);
+        const arena = self.build_arena.allocator();
+        const quads = try font.buildQuads(arena, display_text, node.font_size);
+        // because no other allocations are done in the arena between alloc and free
+        // of this buffer we can actually recoupe the memory (which is great given
+        // that this buffer can become quite large
+        defer arena.free(quads);
         for (quads) |quad| {
             const quad_rect = Rect{ .min = quad.points[0].pos, .max = quad.points[2].pos };
             var rect = base_rect;
