@@ -172,7 +172,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         rect.btm_left_color = node.bg_color;
         rect.top_right_color = node.bg_color;
         rect.btm_right_color = node.bg_color;
-        rect.border_thickness = 0;
+        rect.border_thickness = -1;
         try shader_inputs.append(rect);
 
         const hot_remove_factor = if (node.flags.draw_active_effects) node.active_trans else 0;
@@ -254,7 +254,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             rect.btm_right_color = node.text_color;
             rect.corner_radii = [4]f32{ 0, 0, 0, 0 };
             rect.edge_softness = 0;
-            rect.border_thickness = 0;
+            rect.border_thickness = -1;
             try shader_inputs.append(rect);
         }
     }

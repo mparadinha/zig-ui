@@ -695,7 +695,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                 const hue_color = HSVtoRGB(vec4{ hue[0], 1, 1, 1 });
                 var rect = UI.ShaderInput.fromNode(node);
                 rect.edge_softness = 0;
-                rect.border_thickness = 0;
+                rect.border_thickness = -1;
                 rect.top_left_color = vec4{ 1, 1, 1, 1 };
                 rect.btm_left_color = vec4{ 1, 1, 1, 1 };
                 rect.top_right_color = hue_color;
@@ -739,7 +739,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 var rect = UI.ShaderInput.fromNode(node);
                 rect.edge_softness = 0;
-                rect.border_thickness = 0;
+                rect.border_thickness = -1;
                 const hue_colors = [_]vec4{
                     vec4{ 1, 0, 0, 1 },
                     vec4{ 1, 1, 0, 1 },

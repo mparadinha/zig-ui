@@ -67,7 +67,7 @@ void main() {
     }
 
     float rect_dist = roundedRectSDF(pixel_coord, rect_center, rect_half_size, corner_radii);
-    if (thickness != 0) rect_dist = toBorder(rect_dist, -(thickness / 2), thickness);
+    if (thickness >= 0) rect_dist = toBorder(rect_dist, -(thickness / 2), thickness);
 
     FragColor = rect_color;
     if (softness != 0) {
