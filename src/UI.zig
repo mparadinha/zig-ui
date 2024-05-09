@@ -55,6 +55,9 @@ window_roots: std.ArrayList(*Node),
 screen_size: vec2,
 mouse_pos: vec2, // in pixels
 events: *Window.EventQueue,
+// because the `hovered` signal is tied to an input event we can't remove it from
+// the event queue to signify that some node consumed it.
+some_node_is_hovered: bool,
 
 // cross-frame data
 frame_idx: usize,
@@ -123,6 +126,7 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
         .screen_size = undefined,
         .mouse_pos = undefined,
         .events = undefined,
+        .some_node_is_hovered = false,
 
         .frame_idx = 0,
         .hot_node_key = null,
@@ -751,6 +755,8 @@ pub fn startBuild(
 
     self.first_error_trace = null;
 
+    self.some_node_is_hovered = false;
+
     var mouse_cursor: Cursor = .arrow;
     for ([_]?NodeKey{
         self.focused_node_key,
@@ -848,7 +854,10 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     const enter_up_ev = self.events.match(.KeyUp, .{ .key = .enter });
     var used_enter_up_ev = false;
 
-    signal.hovering = mouse_is_over;
+    if (mouse_is_over and !self.some_node_is_hovered) {
+        signal.hovering = true;
+        self.some_node_is_hovered = true;
+    }
 
     if (node.flags.clickable or node.flags.toggleable) {
         // begin/end a click if there was a mouse down/up event on this node
