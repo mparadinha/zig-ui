@@ -8,9 +8,13 @@
         },
     },
     .paths = .{
+        "build.zig",
+        "build.zig.zon",
         "zig_ui.zig",
         "src",
+        "resources",
         "demo.zig",
+        "README.md",
         "LICENSE",
     },
 }
