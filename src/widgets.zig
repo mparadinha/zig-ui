@@ -322,6 +322,26 @@ pub fn dropDownList(
     return click_region.signal;
 }
 
+pub fn enumTabs(ui: *UI, comptime T: type, selected_tab: *T) void {
+    // TODO: return a signal? if one the tab buttons was clicked, etc
+
+    ui.startLine();
+    defer ui.endLine();
+
+    // TODO: render tabs without bottom border when selected
+
+    inline for (@typeInfo(T).Enum.fields) |field| {
+        const enum_val: T = @enumFromInt(field.value);
+        if (selected_tab.* == enum_val) {
+            ui.label(field.name);
+        } else {
+            if (ui.button(field.name).clicked) selected_tab.* = enum_val;
+        }
+    }
+
+    // TODO: allow opt-out/in of the ctrl+{shift}+tab behavior of cycling through tabs
+}
+
 /// pushes a new node as parent that is meant only for layout purposes
 pub fn pushLayoutParent(
     ui: *UI,

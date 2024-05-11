@@ -52,6 +52,9 @@ const DemoState = struct {
     listbox_idx: usize = 0,
     measuring_square_start: ?vec2 = null,
     show_window_test: bool = false,
+    selected_tab: Tabs = .First,
+
+    const Tabs = enum { First, @"The Second", Other };
 };
 
 fn showDemo(
@@ -202,6 +205,16 @@ fn showDemo(
         ui.startTooltip(null);
         ui.labelF("{d}x{d}", .{ size[0], size[1] });
         ui.endTooltip();
+    }
+
+    ui.enumTabs(DemoState.Tabs, &state.selected_tab);
+    switch (state.selected_tab) {
+        .First => ui.label("This is the content for 'First' tab"),
+        .@"The Second" => ui.label(
+            \\We can take advantage of the fact that zig enum's (actually any identifiers)
+            \\can be any string we want to choose whatever tab titles are needed."
+        ),
+        .Other => ui.label("and another tab, for good measure"),
     }
 
     // show at the end, to get more accurate stats for this frame
