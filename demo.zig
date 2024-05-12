@@ -22,7 +22,13 @@ pub fn main() !void {
     ui.base_style.text_color = vec4{ 1, 1, 1, 1 };
     ui.base_style.border_thickness = 2;
 
-    var demo = DemoState{};
+    var dbg_ui_view = try UI.DebugView.init(allocator);
+    defer dbg_ui_view.deinit();
+
+    var text_input_backing_buffer: [1000]u8 = undefined;
+    var demo = DemoState{
+        .text_input = UI.TextInputState.init(&text_input_backing_buffer, ""),
+    };
 
     var last_time: f32 = @floatCast(glfw.getTime());
     while (!window.shouldClose()) {
@@ -37,9 +43,17 @@ pub fn main() !void {
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
         ui.endBuild(dt);
 
+        if (window.event_queue.searchAndRemove(.KeyUp, .{
+            .mods = .{ .control = true, .shift = true },
+            .key = .d,
+        })) dbg_ui_view.active = !dbg_ui_view.active;
+
         window.clear(demo.clear_color);
         // do whatever other rendering you want here
         try ui.render();
+        if (dbg_ui_view.active) {
+            try dbg_ui_view.show(&ui, fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window, dt);
+        }
 
         window.update();
     }
@@ -52,10 +66,18 @@ const DemoState = struct {
     listbox_idx: usize = 0,
     measuring_square_start: ?vec2 = null,
     show_window_test: bool = false,
-    selected_tab: Tabs = .First,
+    selected_tab: Tabs = .Basics,
+    text_input: UI.TextInputState,
 
-    const Tabs = enum { First, @"The Second", Other };
+    const Tabs = enum {
+        Basics,
+        Styling,
+        @"Live Node Editor",
+        @"Custom Texture",
+    };
 };
+
+const use_child_size = UI.Size.fillByChildren(1, 1);
 
 fn showDemo(
     _: std.mem.Allocator,
@@ -67,7 +89,6 @@ fn showDemo(
 ) !void {
     const demo_p = ui.addNode(.{
         .draw_background = true,
-        .scroll_children_y = true,
     }, "demo_window", .{
         .bg_color = state.demo_window_bg_color,
         .size = UI.Size.exact(.percent, 1, 1),
@@ -76,8 +97,77 @@ fn showDemo(
     ui.pushParent(demo_p);
     defer ui.popParentAssert(demo_p);
 
-    const use_child_size = UI.Size.fillByChildren(1, 1);
+    ui.enumTabs(DemoState.Tabs, &state.selected_tab);
+    if (event_q.matchAndRemove(.KeyDown, .{ .key = .tab })) |ev| blk: {
+        if (!ev.mods.control) break :blk;
+        const current_enum_value = @intFromEnum(state.selected_tab);
+        const enum_values_count = @typeInfo(DemoState.Tabs).Enum.fields.len;
+        const new_enum_value = if (ev.mods.shift)
+            if (current_enum_value == 0) enum_values_count - 1 else current_enum_value - 1
+        else
+            (current_enum_value + 1) % enum_values_count;
+        state.selected_tab = @enumFromInt(new_enum_value);
+    }
 
+    const tab_content_p = ui.addNode(.{
+        .clip_children = true,
+        .scroll_children_y = true,
+    }, "demo_window", .{
+        .size = UI.Size.flexible(.percent, 1, 1),
+        .layout_axis = .y,
+    });
+    ui.pushParent(tab_content_p);
+    defer ui.popParentAssert(tab_content_p);
+
+    switch (state.selected_tab) {
+        .Basics => try showDemoBasics(ui, state),
+        else => ui.label("TODO"),
+    }
+
+    if (event_q.matchAndRemove(.MouseDown, .{ .button = .middle })) |_|
+        state.measuring_square_start = mouse_pos;
+    if (event_q.matchAndRemove(.MouseUp, .{ .button = .middle })) |_|
+        state.measuring_square_start = null;
+    if (state.measuring_square_start) |start_pos| {
+        const rect = UI.Rect{
+            .min = @min(start_pos, mouse_pos),
+            .max = @max(start_pos, mouse_pos),
+        };
+        const size = rect.size();
+        _ = ui.addNode(.{
+            .draw_background = true,
+            .floating_x = true,
+            .floating_y = true,
+            .no_id = true,
+        }, "", .{
+            .bg_color = vec4{ 1, 1, 1, 0.3 },
+            .size = UI.Size.exact(.pixels, size[0], size[1]),
+            .rel_pos = UI.RelativePlacement.simple(rect.min),
+        });
+        ui.startTooltip(null);
+        ui.labelF("{d}x{d}", .{ size[0], size[1] });
+        ui.endTooltip();
+    }
+
+    // show at the end, to get more accurate stats for this frame
+    if (state.debug_stats) {
+        const stats_window = ui.startWindow(
+            "debug stats window",
+            UI.Size.fillByChildren(1, 1),
+            UI.RelativePlacement.match(.top_right),
+        );
+        defer ui.endWindow(stats_window);
+        ui.labelF("mouse_pos={d}", .{ui.mouse_pos});
+        ui.labelF("frame_idx={d}", .{ui.frame_idx});
+        ui.labelF("{d:4.2} fps", .{1 / dt});
+        ui.labelF("# of nodes: {}", .{ui.node_table.count()});
+        ui.labelF("build_arena capacity: {:.2}", .{
+            std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
+        });
+    }
+}
+
+fn showDemoBasics(ui: *UI, state: *DemoState) !void {
     ui.label("Labels are for blocks of text with no interactivity.");
     ui.labelBox("You can use `labelBox` instead, if you want a background/borders");
     ui.labelBox(
@@ -182,55 +272,15 @@ fn showDemo(
         try ui.dumpNodeTreeGraph(ui.root.?, dump_file);
     }
 
-    if (event_q.matchAndRemove(.MouseDown, .{ .button = .middle })) |_|
-        state.measuring_square_start = mouse_pos;
-    if (event_q.matchAndRemove(.MouseUp, .{ .button = .middle })) |_|
-        state.measuring_square_start = null;
-    if (state.measuring_square_start) |start_pos| {
-        const rect = UI.Rect{
-            .min = @min(start_pos, mouse_pos),
-            .max = @max(start_pos, mouse_pos),
-        };
-        const size = rect.size();
-        _ = ui.addNode(.{
-            .draw_background = true,
-            .floating_x = true,
-            .floating_y = true,
-            .no_id = true,
-        }, "", .{
-            .bg_color = vec4{ 1, 1, 1, 0.3 },
-            .size = UI.Size.exact(.pixels, size[0], size[1]),
-            .rel_pos = UI.RelativePlacement.simple(rect.min),
-        });
-        ui.startTooltip(null);
-        ui.labelF("{d}x{d}", .{ size[0], size[1] });
-        ui.endTooltip();
-    }
-
-    ui.enumTabs(DemoState.Tabs, &state.selected_tab);
-    switch (state.selected_tab) {
-        .First => ui.label("This is the content for 'First' tab"),
-        .@"The Second" => ui.label(
-            \\We can take advantage of the fact that zig enum's (actually any identifiers)
-            \\can be any string we want to choose whatever tab titles are needed."
-        ),
-        .Other => ui.label("and another tab, for good measure"),
-    }
-
-    // show at the end, to get more accurate stats for this frame
-    if (state.debug_stats) {
-        const stats_window = ui.startWindow(
-            "debug stats window",
-            UI.Size.fillByChildren(1, 1),
-            UI.RelativePlacement.match(.top_right),
+    {
+        const p = ui.pushLayoutParent(.{}, "text_input_p", [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) }, .x);
+        defer ui.popParentAssert(p);
+        ui.labelBoxF("A text input box (length of input: {:3>}):", .{state.text_input.bufpos});
+        ui.pushTmpStyle(.{ .bg_color = vec4{ 0.75, 0.75, 0.75, 1 } });
+        _ = ui.lineInput(
+            "testing_text_input",
+            UI.Size.percent(1, 0),
+            &state.text_input,
         );
-        defer ui.endWindow(stats_window);
-        ui.labelF("mouse_pos={d}", .{ui.mouse_pos});
-        ui.labelF("frame_idx={d}", .{ui.frame_idx});
-        ui.labelF("{d:4.2} fps", .{1 / dt});
-        ui.labelF("# of nodes: {}", .{ui.node_table.count()});
-        ui.labelF("build_arena capacity: {:.2}", .{
-            std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
-        });
     }
 }

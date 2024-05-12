@@ -163,10 +163,20 @@ pub fn subtleIconButton(ui: *UI, str: []const u8) Signal {
     return node.signal;
 }
 
-pub fn slider(ui: *UI, name: []const u8, size: [2]Size, value_ptr: *f32, min: f32, max: f32) void {
+pub fn slider(
+    ui: *UI,
+    comptime T: type,
+    name: []const u8,
+    size: [2]Size,
+    value_ptr: *T,
+    min: T,
+    max: T,
+) void {
     // TODO: also allow integer types for values
+    if (T != f32 and T != f64) @panic("TODO: add support for non-float types for `slider`");
     // TODO: generalizing this to y-axis slider so it can be used for scroll bars and stuff like volume sliders
     // TODO: maybe add a more generic slider functions like `sliderOptions` or `sliderExtra` or `sliderOpts` or `sliderEx`
+    //       or just add an `options: SliderOptions` argument, following the convention of zig stdlib
 
     value_ptr.* = clamp(value_ptr.*, min, max);
 
@@ -522,19 +532,53 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
     ui.popParentAssert(parent);
 }
 
-pub fn textInput(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) Signal {
-    return textInputRaw(ui, hash, buffer, buf_len) catch |e| blk: {
+pub const TextInputState = struct {
+    buffer: []u8,
+    bufpos: usize,
+    // the cursor/mark is in bytes into buffer
+    cursor: usize,
+    mark: usize,
+
+    pub fn init(backing_buffer: []u8, str: []const u8) TextInputState {
+        var input_data = TextInputState{
+            .buffer = backing_buffer,
+            .bufpos = str.len,
+            .cursor = 0,
+            .mark = 0,
+        };
+        @memcpy(input_data.buffer[0..str.len], str);
+        return input_data;
+    }
+
+    pub fn slice(self: TextInputState) []u8 {
+        return self.buffer[0..self.bufpos];
+    }
+};
+
+pub fn lineInput(
+    ui: *UI,
+    hash: []const u8,
+    x_size: UI.Size,
+    input: *TextInputState,
+) Signal {
+    return textInputRaw(ui, hash, x_size, input) catch |e| blk: {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
         break :blk std.mem.zeroes(Signal);
     };
 }
 
-pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !Signal {
-    const display_str = buffer[0..buf_len.*];
-    // TODO: what is the point of writing this zero byte? the search/match code crashes when I remove it
-    buffer[buf_len.*] = 0;
+// TODO: multi-line input support; will need an options struct param for
+// pressing enter behavior: input a newline or should that need shift-enter?)
+pub fn textInputRaw(
+    ui: *UI,
+    hash: []const u8,
+    x_size: UI.Size,
+    input: *TextInputState,
+) !Signal {
+    const buffer = input.buffer;
+    const buf_len = &input.bufpos;
 
-    // note: the node cursor/mark is in bytes into buffer
+    const display_str = input.slice();
 
     const widget_node = ui.addNodeStringsF(.{
         .clickable = true,
@@ -545,11 +589,8 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
     }, "", .{}, "{s}", .{hash}, .{
         .layout_axis = .x,
         .cursor_type = .ibeam,
+        .size = [2]UI.Size{ x_size, UI.Size.children(1) },
     });
-    if (widget_node.first_time) {
-        widget_node.cursor = buf_len.*;
-        widget_node.mark = buf_len.*;
-    }
 
     ui.pushParent(widget_node);
     defer ui.popParentAssert(widget_node);
@@ -572,8 +613,8 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
     const font_pixel_size = ui.topStyle().font_size;
     const text_padd = ui.textPadding(text_node);
 
-    const rect_before_cursor = try ui.font.textRect(buffer[0..widget_node.cursor], font_pixel_size);
-    const rect_before_mark = try ui.font.textRect(buffer[0..widget_node.mark], font_pixel_size);
+    const rect_before_cursor = try ui.font.textRect(buffer[0..input.cursor], font_pixel_size);
+    const rect_before_mark = try ui.font.textRect(buffer[0..input.mark], font_pixel_size);
 
     const cursor_height = ui.font.getScaledMetrics(font_pixel_size).line_advance - text_padd[1];
     const cursor_rel_pos = vec2{ rect_before_cursor.max[0], 0 } + text_padd;
@@ -592,7 +633,7 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
         .size = Size.exact(.pixels, 1, cursor_height),
         .rel_pos = RelativePlacement.simple(text_node.rel_pos.diff + cursor_rel_pos),
     });
-    _ = ui.addNode(filled_rect_flags, "", .{
+    _ = ui.addNode(filled_rect_flags, "", .{ // selection rectangle
         .bg_color = vec4{ 0, 0, 1, 0.25 },
         .size = Size.exact(.pixels, selection_size, cursor_height),
         .rel_pos = RelativePlacement.simple(text_node.rel_pos.diff + selection_rel_pos),
@@ -636,14 +677,15 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
             idx += codepoint_len;
         }
 
-        if (sig.held_down) widget_node.cursor = idx;
-        if (sig.pressed) widget_node.mark = idx;
+        if (sig.held_down) input.cursor = idx;
+        if (sig.pressed) input.mark = idx;
     }
     // TODO: doing a click followed by press and drag in the same timing as a double-click
     // does a selection but using the same "word scan" as the double click code path
+    // TODO: pressing escape to unselect currently selected text range
 
     while (ui.events.next()) |event| {
-        const has_selection = widget_node.cursor != widget_node.mark;
+        const has_selection = input.cursor != input.mark;
         var ev_was_used = true;
         switch (event) {
             .KeyDown, .KeyRepeat => |ev| {
@@ -672,7 +714,7 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
     for (text_actions.slice()) |action| {
         var unicode_buf: [4]u8 = undefined;
         const cur_buf = buffer[0..buf_len.*];
-        const text_op = try text_ops.textOpFromAction(action, widget_node.cursor, widget_node.mark, &unicode_buf, cur_buf);
+        const text_op = try text_ops.textOpFromAction(action, input.cursor, input.mark, &unicode_buf, cur_buf);
 
         text_ops.replaceRange(buffer, buf_len, .{ .start = text_op.range.start, .end = text_op.range.end }, text_op.replace_str);
         if (text_op.copy_str.len > 0) {
@@ -680,8 +722,8 @@ pub fn textInputRaw(ui: *UI, hash: []const u8, buffer: []u8, buf_len: *usize) !S
             defer ui.allocator.free(c_str);
             glfw.setClipboardString(c_str);
         }
-        widget_node.cursor = text_op.byte_cursor;
-        widget_node.mark = text_op.byte_mark;
+        input.cursor = text_op.byte_cursor;
+        input.mark = text_op.byte_mark;
     }
 
     return sig;
@@ -826,7 +868,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
         defer ui.popParentAssert(p);
         const slider_size = [2]Size{ Size.percent(1, 0), Size.text(1) };
         const slider_name = ui.fmtTmpString("{s}_comp_{s}", .{ hash, comp });
-        ui.slider(slider_name, slider_size, &color_ptr[idx], 0, 1);
+        ui.slider(f32, slider_name, slider_size, &color_ptr[idx], 0, 1);
         ui.labelF("{s} {d:1.3}", .{ comp, color_ptr[idx] });
     }
 }

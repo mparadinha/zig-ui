@@ -38,7 +38,10 @@ pub fn build(b: *std.Build) void {
     });
     demo.linkLibC();
     demo.root_module.addImport("zig-ui", zig_ui_mod);
-    const run_demo = b.addRunArtifact(demo);
-    const run_demo_step = b.step("run-demo", "Run the demo");
-    run_demo_step.dependOn(&run_demo.step);
+    const build_demo_step = b.step("demo", "Build demo program");
+    const build_demo_artifact = b.addInstallArtifact(demo, .{});
+    build_demo_step.dependOn(&build_demo_artifact.step);
+    const run_demo_step = b.step("run-demo", "Run demo program");
+    const run_demo_artifact = b.addRunArtifact(demo);
+    run_demo_step.dependOn(&run_demo_artifact.step);
 }

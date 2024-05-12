@@ -235,8 +235,6 @@ pub const Node = struct {
 
     // cross-frame state for specific features
     rel_pos: RelativePlacement, // relative to parent
-    cursor: usize, // used for text input
-    mark: usize, // used for text input
     last_click_time: f32, // used for double click checks
     last_double_click_time: f32, // used for triple click checks
     scroll_offset: vec2,
@@ -1426,6 +1424,7 @@ pub const DebugView = struct {
     ui: UI,
     active: bool,
     node_list_idx: usize,
+    node_list_len: usize,
     node_query_pos: ?vec2,
     anchor_right: bool,
     show_help: bool,
@@ -1436,6 +1435,7 @@ pub const DebugView = struct {
             .ui = try UI.init(allocator, .{}),
             .active = false,
             .node_list_idx = 0,
+            .node_list_len = 0,
             .node_query_pos = null,
             .anchor_right = false,
             .show_help = true,
@@ -1460,12 +1460,16 @@ pub const DebugView = struct {
         const ctrl_shift = Window.InputEvent.Modifiers{ .shift = true, .control = true };
         if (events.searchAndRemove(.KeyDown, .{ .key = .h, .mods = ctrl_shift }))
             self.show_help = !self.show_help;
-        // scroll up/down to change the highlighted node in the list
-        if (events.fetchAndRemove(.MouseScroll, null)) |scroll_ev| {
-            if (scroll_ev.y < 0) self.node_list_idx += 1;
-            if (scroll_ev.y > 0) {
-                if (self.node_list_idx > 0) self.node_list_idx -= 1;
+        // ctrl+shift+up/down to change the highlighted node in the list
+        if (events.searchAndRemove(.KeyDown, .{ .key = .up, .mods = ctrl_shift })) {
+            if (self.node_list_idx == 0) {
+                self.node_list_idx = std.math.maxInt(usize);
+            } else {
+                self.node_list_idx -= 1;
             }
+        }
+        if (events.searchAndRemove(.KeyDown, .{ .key = .down, .mods = ctrl_shift })) {
+            self.node_list_idx = (self.node_list_idx + 1) % self.node_list_len;
         }
         // ctrl+shift+scroll_click to freeze query position to current mouse_pos
         if (events.find(.MouseUp, .{ .button = .middle, .mods = ctrl_shift })) |ev_idx| blk: {
@@ -1492,6 +1496,7 @@ pub const DebugView = struct {
         if (selected_nodes.items.len == 0) return;
 
         self.node_list_idx = clamp(self.node_list_idx, 0, selected_nodes.items.len - 1);
+        self.node_list_len = selected_nodes.items.len;
         const active_node = selected_nodes.items[self.node_list_idx];
 
         try self.ui.startBuild(width, height, mouse_pos, events, window);
@@ -1518,21 +1523,21 @@ pub const DebugView = struct {
             .size = Size.fromRect(active_node.rect),
         });
         // blue border to show the padding
-        if (@reduce(.And, active_node.padding != vec2{ 0, 0 })) {
-            _ = self.ui.addNode(border_node_flags, "", .{
-                .border_color = vec4{ 0, 0, 1, 0.5 },
-                .rel_pos = RelativePlacement.simple(active_node.rect.min + active_node.padding),
-                .size = size: {
-                    const size = active_node.rect.size() - active_node.padding * vec2{ 2, 2 };
-                    break :size Size.exact(.pixels, size[0], size[1]);
-                },
-            });
-        }
+        // if (@reduce(.And, active_node.padding != vec2{ 0, 0 })) {
+        //     _ = self.ui.addNode(border_node_flags, "", .{
+        //         .border_color = vec4{ 0, 0, 1, 0.5 },
+        //         .rel_pos = RelativePlacement.simple(active_node.rect.min + active_node.padding),
+        //         .size = size: {
+        //             const size = active_node.rect.size() - active_node.padding * vec2{ 2, 2 };
+        //             break :size Size.exact(.pixels, size[0], size[1]);
+        //         },
+        //     });
+        // }
         _ = self.ui.popStyle();
 
         self.ui.pushStyle(.{ .font_size = 16, .bg_color = vec4{ 0, 0, 0, 0.75 } });
         defer _ = self.ui.popStyle();
-        self.ui.root_node.?.layout_axis = .x;
+        self.ui.root.?.layout_axis = .x;
         if (self.anchor_right) self.ui.spacer(.x, Size.percent(1, 0));
         {
             const left_bg_node = self.ui.addNode(.{
@@ -1550,9 +1555,9 @@ pub const DebugView = struct {
 
             for (selected_nodes.items, 0..) |node, idx| {
                 if (idx == self.node_list_idx) {
-                    self.ui.labelBoxF("hash=\"{s}\"", .{node.key});
+                    self.ui.labelBoxF("key=0x{x}", .{node.key});
                 } else {
-                    self.ui.labelF("hash=\"{s}\"", .{node.key});
+                    self.ui.labelF("key=0x{x}", .{node.key});
                 }
             }
         }
@@ -1580,8 +1585,9 @@ pub const DebugView = struct {
                 }
                 switch (field.type) {
                     ?*Node => if (value) |link| {
-                        self.ui.labelF("{s}.hash_string=\"{s}\"", .{ name, link.key });
+                        self.ui.labelF("{s}.key=0x{x}", .{ name, link.key });
                     },
+                    NodeKey => self.ui.labelF("{s}.key=0x{x}", .{ name, value }),
                     Flags => {
                         var buf = std.BoundedArray(u8, 1024){};
                         inline for (@typeInfo(Flags).Struct.fields) |flag_field| {
@@ -1593,14 +1599,15 @@ pub const DebugView = struct {
                     },
                     Signal => {
                         var buf = std.BoundedArray(u8, 1024){};
+                        try buf.writer().print(".mouse_pos={d}, .scroll_amount={d:.1}", .{
+                            value.mouse_pos, value.scroll_amount,
+                        });
                         inline for (@typeInfo(Signal).Struct.fields) |signal_field| {
                             if (signal_field.type == bool and @field(value, signal_field.name)) {
-                                _ = try buf.writer().write(signal_field.name ++ ", ");
+                                _ = try buf.writer().write(", " ++ signal_field.name);
                             }
                         }
-                        self.ui.labelF("{s}={{{s}.mouse_pos={d}, .scroll_amount={d}}}", .{
-                            name, buf.slice(), value.mouse_pos, value.scroll_amount,
-                        });
+                        self.ui.labelF("{s}={{{s}}}", .{ name, buf.slice() });
                     },
                     []const u8 => {
                         self.ui.labelF("{s}=\"{s}\"", .{ name, value[0..@min(value.len, 35)] });
@@ -1623,7 +1630,7 @@ pub const DebugView = struct {
 
             self.ui.label("Ctrl+Shift+H            -> toggle this help menu");
             self.ui.label("Ctrl+Shift+D            -> toggle dbg UI");
-            self.ui.label("scroll up/down          -> choose highlighed node");
+            self.ui.label("Ctrl+Shift+Up/Down      -> choose highlighed node");
             self.ui.label("Ctrl+Shift+ScrollClick  -> freeze mouse position");
             self.ui.label("Ctrl+Shift+Left/Right   -> anchor left/right");
         }
