@@ -532,6 +532,75 @@ pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f3
     ui.popParentAssert(parent);
 }
 
+pub fn scrollListBegin(ui: *UI, hash: []const u8) void {
+    _ = ui.pushLayoutParentF(.{
+        .draw_background = true,
+        .scroll_children_y = true,
+        .clip_children = true,
+    }, "{s}_scroll_view_p", .{hash}, [2]UI.Size{
+        UI.Size.percent(1, 0), UI.Size.percent(1, 1),
+    }, .y);
+    _ = ui.pushLayoutParentF(.{}, "{s}_list_p", .{hash}, [2]UI.Size{
+        UI.Size.children(1), UI.Size.children(1),
+    }, .y);
+}
+
+pub fn scrollListEnd(
+    ui: *UI,
+    hash: []const u8,
+    packet_parent_size: f32, // TODO: could we use scroll_view_parent size instead?
+) void {
+    const list_parent = ui.popParent();
+    _ = list_parent;
+    const scroll_view_parent = ui.popParent();
+
+    const scroll_bar = ui.addNodeF(.{
+        .clickable = true,
+        .draw_background = true,
+    }, "{s}_scroll_bar", .{hash}, .{
+        .bg_color = vec4{ 0, 0, 0, 0.75 },
+        .size = UI.Size.exact(.pixels, 16, packet_parent_size),
+    });
+    ui.pushParent(scroll_bar);
+    const mouse_pos = scroll_bar.signal.mouse_pos[1];
+    const bar_size = scroll_bar.rect.size()[1];
+    const content_size = scroll_view_parent.first.?.rect.size()[1];
+    const scroll_view_size = scroll_view_parent.rect.size()[1];
+    const scroll_max = content_size - scroll_view_size;
+    const view_pct_of_whole = std.math.clamp(scroll_view_size / content_size, 0, 1);
+    const handle_size = view_pct_of_whole * bar_size;
+    const half_handle = handle_size / 2;
+    const bar_scroll_size = bar_size - handle_size;
+    const mouse_scroll_pct =
+        if (mouse_pos < half_handle)
+        0
+    else if (mouse_pos > (bar_size - half_handle))
+        1
+    else
+        (mouse_pos - (half_handle)) / bar_scroll_size;
+    var scroll_pct = 1 - std.math.clamp(mouse_scroll_pct, 0, 1);
+    if (scroll_bar.signal.held_down) {
+        scroll_view_parent.scroll_offset[1] = scroll_max * scroll_pct;
+    } else {
+        scroll_pct = scroll_view_parent.scroll_offset[1] / scroll_max;
+    }
+    const handle_center_pos = half_handle + (1 - scroll_pct) * bar_scroll_size;
+    const handle_pos = std.math.clamp(handle_center_pos - half_handle, 0, bar_scroll_size);
+    const scroll_handle = ui.addNodeF(.{
+        // TODO: .clickable = true,
+        .draw_background = true,
+        .floating_y = true,
+    }, "{s}_scroll_handle", .{hash}, .{
+        .bg_color = vec4{ 0.8, 0.8, 0.8, 1 },
+        .size = [2]UI.Size{ UI.Size.percent(1, 1), UI.Size.pixels(handle_size, 1) },
+        .corner_radii = [4]f32{ 4, 4, 4, 4 },
+        .rel_pos = UI.RelativePlacement.simple(vec2{ 0, handle_pos }),
+    });
+    _ = scroll_handle;
+    // TODO: clicking on scroll bar is page up/down, current behavior belongs to scroll_handle
+    ui.popParentAssert(scroll_bar);
+}
+
 pub const TextInputState = struct {
     buffer: []u8,
     bufpos: usize,
