@@ -10,7 +10,7 @@ in vec4 attrib_top_right_color;
 in vec4 attrib_btm_right_color;
 in vec4 attrib_corner_radii;
 in float attrib_edge_softness;
-in float attrib_border_thickness;
+in vec4 attrib_border_thickness;
 in vec2 attrib_clip_rect_min;
 in vec2 attrib_clip_rect_max;
 in uint attrib_which_font;
@@ -30,7 +30,7 @@ out VS_Out {
     vec4 corner_radii;
 
     float edge_softness;
-    float border_thickness;
+    vec4 border_thickness;
 
     vec2 clip_rect_min;
     vec2 clip_rect_max;

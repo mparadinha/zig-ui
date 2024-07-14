@@ -20,7 +20,7 @@ in VS_Out {
     vec4 corner_radii;
 
     float edge_softness;
-    float border_thickness;
+    vec4 border_thickness;
 
     vec2 clip_rect_min;
     vec2 clip_rect_max;
@@ -35,7 +35,7 @@ out GS_Out {
     flat vec2 rect_center;
     flat vec4 corner_radii;
     flat float edge_softness;
-    flat float border_thickness;
+    flat vec4 border_thickness;
     flat vec2 clip_rect_min;
     flat vec2 clip_rect_max;
     flat uint which_font;

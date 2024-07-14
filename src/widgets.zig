@@ -332,24 +332,78 @@ pub fn dropDownList(
     return click_region.signal;
 }
 
-pub fn enumTabs(ui: *UI, comptime T: type, selected_tab: *T) void {
-    // TODO: return a signal? if one the tab buttons was clicked, etc
+pub const TabOptions = struct {
+    active_tab_bg: vec4 = UI.colorFromRGB(0x6f, 0x51, 0x35),
+    inactive_tab_bg: vec4 = UI.colorFromRGB(0x2c, 0x33, 0x39),
+    tabbed_content_border: vec4 = UI.colorFromRGB(0xc1, 0x80, 0x0b),
+    close_btn: bool = false,
+};
+pub fn startTabList(
+    ui: *UI,
+) void {
+    // TODO: this `tab_list_p` could be a 'named {start,end}Line' maybe?
+    const tab_list_p = ui.addNode(.{
+        .scroll_children_x = true,
+        .clip_children = true,
+    }, "tab_list", .{
+        .layout_axis = .x,
+        .size = [2]UI.Size{ UI.Size.percent(1, 1), UI.Size.children(1) },
+    });
+    ui.pushParent(tab_list_p);
+}
+pub fn endTabList(ui: *UI) void {
+    _ = ui.popParent(); // tab_list_p
+}
+pub const TabSignal = struct {
+    tab: Signal,
+    close: Signal,
+};
+pub fn tabButton(
+    ui: *UI,
+    name: []const u8,
+    selected: bool,
+    opts: TabOptions,
+) TabSignal {
+    ui.pushStyle(.{
+        .bg_color = if (selected) opts.active_tab_bg else opts.inactive_tab_bg,
+        .border_color = @as(vec4, @splat(0.5)),
+        .corner_radii = [4]f32{ 10, 10, 0, 0 },
+    });
+    defer _ = ui.popStyle();
 
-    ui.startLine();
-    defer ui.endLine();
+    const tab_idx = ui.topParent().child_count;
+    // TODO: maybe render tabs without bottom border when selected?
+    const tab_p = ui.addNodeF(.{
+        .draw_border = true,
+        .draw_background = true,
+    }, "tab_{}", .{tab_idx}, .{
+        .layout_axis = .x,
+        .size = UI.Size.children2(1, 1),
+    });
+    ui.pushParent(tab_p);
+    defer ui.popParentAssert(tab_p);
 
-    // TODO: render tabs without bottom border when selected
+    const tab_sig = ui.subtleButtonF("{s}###title", .{name});
+
+    // TODO: don't display this close btn if `opts.close_btn` is `false`
+    const close_sig = ui.iconButton(UI.Icons.cancel);
+    close_sig.node.?.corner_radii[0] = 0;
+
+    return .{ .tab = tab_sig, .close = close_sig };
+}
+
+pub fn enumTabList(ui: *UI, comptime T: type, selected_tab: *T) void {
+    ui.startTabList();
+    defer ui.endTabList();
 
     inline for (@typeInfo(T).Enum.fields) |field| {
         const enum_val: T = @enumFromInt(field.value);
-        if (selected_tab.* == enum_val) {
-            ui.label(field.name);
-        } else {
-            if (ui.button(field.name).clicked) selected_tab.* = enum_val;
-        }
+        const is_selected = (selected_tab.* == enum_val);
+        const tab_sig = ui.tabButton(field.name, is_selected, .{ .close_btn = false });
+        if (tab_sig.tab.clicked) selected_tab.* = enum_val;
     }
 
-    // TODO: allow opt-out/in of the ctrl+{shift}+tab behavior of cycling through tabs
+    // TODO: return a signal? if one the tab buttons was clicked, etc
 }
 
 /// pushes a new node as parent that is meant only for layout purposes
@@ -615,15 +669,15 @@ pub fn scrollListEnd(
     // TODO: clicking on scroll bar is page up/down, current behavior belongs to scroll_handle
 }
 
-pub const TextInputState = struct {
+pub const TextInput = struct {
     buffer: []u8,
     bufpos: usize,
     // the cursor/mark is in bytes into buffer
     cursor: usize,
     mark: usize,
 
-    pub fn init(backing_buffer: []u8, str: []const u8) TextInputState {
-        var input_data = TextInputState{
+    pub fn init(backing_buffer: []u8, str: []const u8) TextInput {
+        var input_data = TextInput{
             .buffer = backing_buffer,
             .bufpos = str.len,
             .cursor = 0,
@@ -633,7 +687,7 @@ pub const TextInputState = struct {
         return input_data;
     }
 
-    pub fn slice(self: TextInputState) []u8 {
+    pub fn slice(self: TextInput) []u8 {
         return self.buffer[0..self.bufpos];
     }
 };
@@ -642,7 +696,7 @@ pub fn lineInput(
     ui: *UI,
     hash: []const u8,
     x_size: UI.Size,
-    input: *TextInputState,
+    input: *TextInput,
 ) Signal {
     return textInputRaw(ui, hash, x_size, input) catch |e| blk: {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
@@ -656,7 +710,7 @@ pub fn textInputRaw(
     ui: *UI,
     hash: []const u8,
     x_size: UI.Size,
-    input: *TextInputState,
+    input: *TextInput,
 ) !Signal {
     const buffer = input.buffer;
     const buf_len = &input.bufpos;
@@ -838,7 +892,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                 const hue_color = HSVtoRGB(vec4{ hue[0], 1, 1, 1 });
                 var rect = UI.ShaderInput.fromNode(node);
                 rect.edge_softness = 0;
-                rect.border_thickness = -1;
+                rect.border_thickness = vec4{ -1, -1, -1, -1 };
                 rect.top_left_color = vec4{ 1, 1, 1, 1 };
                 rect.btm_left_color = vec4{ 1, 1, 1, 1 };
                 rect.top_right_color = hue_color;
@@ -861,7 +915,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                     rect.top_right_pos = center + radius_vec;
                     rect.corner_radii = [4]f32{ radius, radius, radius, radius };
                     rect.edge_softness = 1;
-                    rect.border_thickness = 2;
+                    rect.border_thickness = vec4{ 2, 2, 2, 2 };
                     try shader_inputs.append(rect);
                 }
             }
@@ -882,7 +936,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 var rect = UI.ShaderInput.fromNode(node);
                 rect.edge_softness = 0;
-                rect.border_thickness = -1;
+                rect.border_thickness = vec4{ -1, -1, -1, -1 };
                 const hue_colors = [_]vec4{
                     vec4{ 1, 0, 0, 1 },
                     vec4{ 1, 1, 0, 1 },
@@ -909,7 +963,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
                 rect.top_right_color = @as(vec4, @splat(1));
                 rect.btm_right_color = @as(vec4, @splat(1));
                 rect.edge_softness = 1;
-                rect.border_thickness = 2;
+                rect.border_thickness = vec4{ 2, 2, 2, 2 };
                 rect.corner_radii = [4]f32{ 2, 2, 2, 2 };
                 const hsv0 = @as(*align(1) const f32, @ptrCast(node.custom_draw_ctx_as_bytes)).*;
                 const bar_size: f32 = 10;
@@ -1061,6 +1115,11 @@ pub fn checkBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, value: *bool)
 pub fn toggleButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, start_open: bool) Signal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.toggleButton(str, start_open);
+}
+
+pub fn tabButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, selected: bool, opts: TabOptions) TabSignal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.tabButton(str, selected, opts);
 }
 
 pub fn pushLayoutParentF(ui: *UI, flags: UI.Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {

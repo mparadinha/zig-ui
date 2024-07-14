@@ -1,7 +1,16 @@
 #version 330 core
 
-layout (pixel_center_integer) in vec4 gl_FragCoord;
+#define BORDER_IDX_TOP    0u
+#define BORDER_IDX_BOTTOM 1u
+#define BORDER_IDX_LEFT   2u
+#define BORDER_IDX_RIGHT  3u
+#define BORDER_MASK_TOP    (1u << BORDER_IDX_TOP)
+#define BORDER_MASK_BOTTOM (1u << BORDER_IDX_BOTTOM)
+#define BORDER_MASK_LEFT   (1u << BORDER_IDX_LEFT)
+#define BORDER_MASK_RIGHT  (1u << BORDER_IDX_RIGHT)
+#define BORDER_MASK_ALL     0x0000000fu
 
+layout (pixel_center_integer) in vec4 gl_FragCoord;
 
 in GS_Out {
     vec2 uv;
@@ -10,13 +19,14 @@ in GS_Out {
     flat vec2 rect_center;
     flat vec4 corner_radii;
     flat float edge_softness;
-    flat float border_thickness;
+    flat vec4 border_thickness;
     flat vec2 clip_rect_min;
     flat vec2 clip_rect_max;
     flat uint which_font;
 } fs_in;
 
 uniform vec2 screen_size;
+// TODO: merge these 3 into a single atlas
 uniform sampler2D text_atlas;
 uniform sampler2D text_bold_atlas;
 uniform sampler2D icon_atlas;
@@ -50,6 +60,32 @@ float toBorder(float dist, float center, float border_size) {
     return abs(dist - center) - border_size / 2;
 }
 
+uint currentBorders(vec2 pixel_coord, vec2 rect_center, vec2 rect_half_size, vec4 thickness) {
+    vec2 rel_coord = pixel_coord - rect_center;
+    uint border_mask = 0u;
+    if (rel_coord.y >   rect_half_size.y - thickness[BORDER_IDX_TOP])     border_mask |= BORDER_MASK_TOP;
+    if (rel_coord.y < -(rect_half_size.y - thickness[BORDER_IDX_BOTTOM])) border_mask |= BORDER_MASK_BOTTOM;
+    if (rel_coord.x < -(rect_half_size.x - thickness[BORDER_IDX_LEFT]))   border_mask |= BORDER_MASK_LEFT;
+    if (rel_coord.x >   rect_half_size.x - thickness[BORDER_IDX_RIGHT])   border_mask |= BORDER_MASK_RIGHT;
+    return border_mask;
+}
+uint enabledBorders(vec4 borders_thickness) {
+    uint border_mask = 0u;
+    if (borders_thickness[BORDER_IDX_TOP]    >= 0) border_mask |= BORDER_MASK_TOP;
+    if (borders_thickness[BORDER_IDX_BOTTOM] >= 0) border_mask |= BORDER_MASK_BOTTOM;
+    if (borders_thickness[BORDER_IDX_LEFT]   >= 0) border_mask |= BORDER_MASK_LEFT;
+    if (borders_thickness[BORDER_IDX_RIGHT]  >= 0) border_mask |= BORDER_MASK_RIGHT;
+    return border_mask;
+}
+float selectThickness(uint borders, vec4 borders_thickness) {
+    float thickness = -1;
+    if ((borders & BORDER_MASK_TOP)    != 0u) thickness = max(thickness, borders_thickness[BORDER_IDX_TOP]);
+    if ((borders & BORDER_MASK_BOTTOM) != 0u) thickness = max(thickness, borders_thickness[BORDER_IDX_BOTTOM]);
+    if ((borders & BORDER_MASK_LEFT)   != 0u) thickness = max(thickness, borders_thickness[BORDER_IDX_LEFT]);
+    if ((borders & BORDER_MASK_RIGHT)  != 0u) thickness = max(thickness, borders_thickness[BORDER_IDX_RIGHT]);
+    return thickness;
+}
+
 void main() {
     vec2 pixel_coord = gl_FragCoord.xy;
     vec4 rect_color = fs_in.color;
@@ -57,7 +93,11 @@ void main() {
     vec2 rect_center = fs_in.rect_center;
     vec4 corner_radii = fs_in.corner_radii;
     float softness = fs_in.edge_softness;
-    float thickness = fs_in.border_thickness;
+    vec4 borders_thickness = fs_in.border_thickness;
+    uint enabled_borders = enabledBorders(borders_thickness);
+    uint current_borders = currentBorders(pixel_coord, rect_center, rect_half_size, borders_thickness);
+    float thickness = selectThickness(current_borders, borders_thickness);
+    bool is_border_enabled = (current_borders & enabled_borders) != 0u;
 
     FragColor = vec4(0);
 
@@ -65,6 +105,8 @@ void main() {
     if (!rectContains(fs_in.clip_rect_min, fs_in.clip_rect_max, pixel_coord)) {
         return;
     }
+
+    if (borders_thickness != vec4(-1) && !is_border_enabled) return;
 
     float rect_dist = roundedRectSDF(pixel_coord, rect_center, rect_half_size, corner_radii);
     if (thickness >= 0) rect_dist = toBorder(rect_dist, -(thickness / 2), thickness);

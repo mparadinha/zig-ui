@@ -138,7 +138,7 @@ pub const Shader = struct {
             geometry: ?[]const u8 = null,
             fragment: []const u8,
         },
-    ) Shader {
+    ) !Shader {
         var shader = Shader{
             .vert_id = 0,
             .frag_id = 0,
@@ -146,16 +146,17 @@ pub const Shader = struct {
             .name = allocator.dupe(u8, name) catch unreachable,
             .allocator = allocator,
         };
+        errdefer allocator.free(shader.name);
 
-        shader.vert_id = shader.compile_src(srcs.vertex, .vertex);
-        if (srcs.geometry) |src| shader.geom_id = shader.compile_src(src, .geometry);
-        shader.frag_id = shader.compile_src(srcs.fragment, .fragment);
+        shader.vert_id = try shader.compile_src(srcs.vertex, .vertex);
+        if (srcs.geometry) |src| shader.geom_id = try shader.compile_src(src, .geometry);
+        shader.frag_id = try shader.compile_src(srcs.fragment, .fragment);
 
-        if (shader.geom_id) |geom_id| {
-            shader.link(&[_]u32{ shader.vert_id, geom_id, shader.frag_id });
-        } else {
-            shader.link(&[_]u32{ shader.vert_id, shader.frag_id });
-        }
+        const shader_ids = if (shader.geom_id) |geom_id|
+            &[_]u32{ shader.vert_id, geom_id, shader.frag_id }
+        else
+            &[_]u32{ shader.vert_id, shader.frag_id };
+        try shader.link(shader_ids);
 
         return shader;
     }
@@ -170,23 +171,20 @@ pub const Shader = struct {
             fragment: []const u8,
         },
     ) !Shader {
-        const max_bytes = std.math.maxInt(usize);
-        const dir = std.fs.cwd();
-        const vert_src = try dir.readFileAlloc(allocator, src_paths.vertex, max_bytes);
+        const vert_src = try readFile(allocator, src_paths.vertex);
         defer allocator.free(vert_src);
-        if (vert_src.len == 0) return error.EmptyFile;
-        const geom_src = if (src_paths.geometry) |path| try dir.readFileAlloc(allocator, path, max_bytes) else null;
+        const geom_src = if (src_paths.geometry) |path| try readFile(allocator, path) else null;
         defer if (geom_src) |src| allocator.free(src);
-        if (geom_src) |src| if (src.len == 0) return error.EmptyFile;
-        const frag_src = try dir.readFileAlloc(allocator, src_paths.fragment, max_bytes);
+        const frag_src = try readFile(allocator, src_paths.fragment);
         defer allocator.free(frag_src);
-        if (frag_src.len == 0) return error.EmptyFile;
-
         return Shader.from_srcs(allocator, name, .{
             .vertex = vert_src,
             .geometry = geom_src,
             .fragment = frag_src,
         });
+    }
+    fn readFile(allocator: Allocator, path: []const u8) ![]const u8 {
+        return std.fs.cwd().readFileAlloc(allocator, path, std.math.maxInt(usize));
     }
 
     pub fn deinit(self: Shader) void {
@@ -202,11 +200,13 @@ pub const Shader = struct {
         gl.deleteProgram(self.prog_id);
     }
 
-    fn compile_src(self: *Shader, src: []const u8, shader_type: ShaderType) u32 {
-        const gl_shader_type = switch (shader_type) {
-            .vertex => @as(u32, gl.VERTEX_SHADER),
-            .geometry => @as(u32, gl.GEOMETRY_SHADER),
-            .fragment => @as(u32, gl.FRAGMENT_SHADER),
+    fn compile_src(self: *Shader, src: []const u8, shader_type: ShaderType) !u32 {
+        if (src.len == 0) return error.EmptySource;
+
+        const gl_shader_type: u32 = switch (shader_type) {
+            .vertex => gl.VERTEX_SHADER,
+            .geometry => gl.GEOMETRY_SHADER,
+            .fragment => gl.FRAGMENT_SHADER,
         };
         const id: u32 = gl.createShader(gl_shader_type);
         gl.shaderSource(id, 1, &(&src[0]), &(@as(c_int, @intCast(src.len))));
@@ -223,34 +223,13 @@ pub const Shader = struct {
                 @tagName(shader_type),
                 @as([*c]u8, &msg_buf[0]),
             });
-            unreachable;
+            return error.FailedShaderCompile;
         }
 
         return id;
     }
 
-    fn compile_file(self: *Shader, shader_type: ShaderType) u32 {
-        const ext = switch (shader_type) {
-            .vertex => "vert",
-            .geometry => @panic("geometry shaders only supported when using `from_srcs`"),
-            .fragment => "frag",
-        };
-        const filename = std.mem.join(self.allocator, ".", &.{ self.name, ext }) catch unreachable;
-        defer self.allocator.free(filename);
-
-        const filepath = std.fs.path.join(self.allocator, &.{ src_dir, filename }) catch unreachable;
-        defer self.allocator.free(filepath);
-
-        const src = std.fs.cwd().readFileAlloc(self.allocator, filepath, 0x1_0000) catch |err| {
-            std.log.info("error reading '{s}': {}", .{ filepath, err });
-            return 0;
-        };
-        defer self.allocator.free(src);
-
-        return self.compile_src(src, shader_type);
-    }
-
-    fn link(self: *Shader, ids: []const u32) void {
+    fn link(self: *Shader, ids: []const u32) !void {
         self.prog_id = gl.createProgram();
         for (ids) |shader_id| gl.attachShader(self.prog_id, shader_id);
 
@@ -263,15 +242,8 @@ pub const Shader = struct {
             var msg_buf: [0x1000]u8 = undefined;
             gl.getProgramInfoLog(self.prog_id, 0x1000, null, &msg_buf[0]);
             std.log.info("{s} link error: {s}", .{ self.name, @as([*c]u8, &msg_buf[0]) });
-            unreachable;
+            return error.FailedShaderLink;
         }
-    }
-
-    fn compile_from_files(self: *Shader) void {
-        self.vert_id = self.compile_file(.vertex);
-        self.frag_id = self.compile_file(.fragment);
-
-        self.link(&.{ self.vert_id, self.frag_id });
     }
 
     pub fn bind(self: Shader) void {

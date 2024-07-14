@@ -9,6 +9,7 @@ const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
 const Font = zig_ui.Font;
 const gfx = @import("graphics.zig");
+const utils = @import("utils.zig");
 
 const build_opts = @import("build_opts");
 
@@ -16,6 +17,7 @@ const UI = @This();
 pub usingnamespace @import("widgets.zig");
 pub usingnamespace @import("layout.zig");
 pub usingnamespace @import("rendering.zig");
+pub usingnamespace @import("utils.zig");
 
 const ShaderInput = @import("rendering.zig").ShaderInput;
 
@@ -100,7 +102,7 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
             .vertex = @embedFile("shader.vert"),
             .geometry = @embedFile("shader.geom"),
             .fragment = @embedFile("shader.frag"),
-        }),
+        }) catch unreachable,
         .font = try Font.fromTTF(allocator, font_opts.font_path),
         .font_bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
         .icon_font = try Font.fromTTF(allocator, font_opts.icon_font_path),
@@ -257,7 +259,7 @@ pub const Style = struct {
     border_color: vec4 = vec4{ 0.5, 0.5, 0.5, 0.75 },
     text_color: vec4 = vec4{ 1, 1, 1, 1 },
     corner_radii: [4]f32 = [4]f32{ 0, 0, 0, 0 },
-    edge_softness: f32 = 0,
+    edge_softness: f32 = 0.5,
     border_thickness: f32 = -1,
     size: [2]Size = .{ Size.text(1), Size.text(1) },
     layout_axis: Axis = .y,
@@ -280,6 +282,8 @@ pub const Size = union(enum) {
     percent: struct { value: f32, strictness: f32 },
     children: struct { strictness: f32 },
 
+    const Tag = std.meta.Tag(Size);
+
     pub fn pixels(value: f32, strictness: f32) Size {
         return Size{ .pixels = .{ .value = value, .strictness = strictness } };
     }
@@ -296,13 +300,15 @@ pub const Size = union(enum) {
         return Size{ .children = .{ .strictness = strictness } };
     }
 
+    // TODO: `em` Size type as well? or just a UI helper that uses the top font?
+
     pub fn getStrictness(self: Size) f32 {
         return switch (self) {
             inline else => |v| v.strictness,
         };
     }
 
-    const Tag = std.meta.Tag(Size);
+    pub const children2 = fillByChildren;
 
     pub fn exact(tag: Tag, x: f32, y: f32) [2]Size {
         return switch (tag) {
@@ -356,7 +362,7 @@ pub const Rect = struct {
     max: vec2,
 
     pub fn at(placement: Placement, rect_size: vec2) Rect {
-        const btm_left = placement.convertTo(.btm_left, rect_size);
+        const btm_left = placement.convertTo(.btm_left, rect_size).btm_left;
         return .{ .min = btm_left, .max = btm_left + rect_size };
     }
 
@@ -489,6 +495,8 @@ pub const RelativePlacement = struct {
 };
 
 pub const Signal = struct {
+    node: ?*Node,
+
     clicked: bool = false,
     pressed: bool = false,
     released: bool = false,
@@ -571,8 +579,12 @@ pub fn addNodeRawStrings(
     };
 
     const node_key = self.node_table.getKeyHash(hash_str);
-    if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_|
+    if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_| {
+        // TODO: in the future this should not panic but instead save the error
+        // for the user until the end of build; when we implement that we should
+        // turn this node into a `no_id` and return it as if nothing happened.
         std.debug.panic("hash_string='{s}' has collision\n", .{hash_str});
+    }
 
     // if a node already exists that matches this one we just use that one
     // this way the persistant cross-frame data is possible
@@ -618,7 +630,7 @@ pub fn addNodeRawStrings(
     // update cross-frame (persistant) data
     node.last_frame_touched = self.frame_idx;
     if (node.first_time) {
-        node.signal = .{ .mouse_pos = undefined };
+        node.signal = .{ .node = node, .mouse_pos = undefined };
         node.first_frame_touched = self.frame_idx;
         node.rel_pos = RelativePlacement.match(.btm_left);
         node.last_click_time = 0;
@@ -833,6 +845,7 @@ fn computeSignalsForTree(self: *UI, root: *Node) !void {
 
 pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     var signal = Signal{
+        .node = node,
         .mouse_pos = self.mouse_pos - node.rect.min,
         // .mouse_drag = null,
     };
@@ -907,8 +920,10 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
             var scroll = vec2{ ev.x, ev.y } * node.scroll_multiplier;
             // TODO: add support for Home/End, PageUp/Down
 
-            // support x-scrolling by holding shift
-            if (scroll[0] == 0 and ev.mods.shift) std.mem.swap(f32, &scroll[0], &scroll[1]);
+            // scroll along the child layout axis of the node
+            // and shift+scroll swaps the scroll axis
+            if ((scroll[0] == 0 and ev.mods.shift) or node.layout_axis == .x)
+                std.mem.swap(f32, &scroll[0], &scroll[1]);
 
             if (!node.flags.scroll_children_x) scroll[0] = 0;
             if (!node.flags.scroll_children_y) scroll[1] = 0;

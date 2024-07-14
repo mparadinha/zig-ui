@@ -7,7 +7,11 @@ const UI = @import("UI.zig");
 const Node = UI.Node;
 const Rect = UI.Rect;
 const Font = @import("Font.zig");
+const gfx = @import("graphics.zig");
 const indexOfNthScalar = UI.indexOfNthScalar;
+
+pub var hot_reload_shaders: bool = false;
+pub var hot_reload_frame_interval: usize = 10;
 
 // this struct must have the exact layout expected by the shader
 pub const ShaderInput = extern struct {
@@ -21,7 +25,7 @@ pub const ShaderInput = extern struct {
     btm_right_color: [4]f32,
     corner_radii: [4]f32,
     edge_softness: f32,
-    border_thickness: f32,
+    border_thickness: [4]f32,
     clip_rect_min: [2]f32,
     clip_rect_max: [2]f32,
     which_font: u32,
@@ -41,7 +45,7 @@ pub const ShaderInput = extern struct {
             .btm_right_color = vec4{ 0, 0, 0, 0 },
             .corner_radii = node.corner_radii,
             .edge_softness = node.edge_softness,
-            .border_thickness = node.border_thickness,
+            .border_thickness = @as(vec4, @splat(node.border_thickness)),
             .clip_rect_min = node.clip_rect.min,
             .clip_rect_max = node.clip_rect.max,
             .which_font = @intFromEnum(node.font_type),
@@ -134,6 +138,16 @@ pub fn render(self: *UI) !void {
     );
     gl.blendEquationSeparate(gl.FUNC_ADD, gl.MAX);
 
+    if (hot_reload_shaders and self.frame_idx % hot_reload_frame_interval == 0) blk: {
+        const updated_shader = gfx.Shader.from_files(self.allocator, "ui_generic", .{
+            .vertex = "src/shader.vert",
+            .geometry = "src/shader.geom",
+            .fragment = "src/shader.frag",
+        }) catch break :blk;
+        self.generic_shader.deinit();
+        self.generic_shader = updated_shader;
+    }
+
     self.generic_shader.bind();
     self.generic_shader.set("screen_size", self.screen_size);
     self.generic_shader.set("text_atlas", @as(i32, 0));
@@ -172,7 +186,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         rect.btm_left_color = node.bg_color;
         rect.top_right_color = node.bg_color;
         rect.btm_right_color = node.bg_color;
-        rect.border_thickness = -1;
+        rect.border_thickness = [4]f32{ -1, -1, -1, -1 };
         try shader_inputs.append(rect);
 
         const hot_remove_factor = if (node.flags.draw_active_effects) node.active_trans else 0;
@@ -254,7 +268,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             rect.btm_right_color = node.text_color;
             rect.corner_radii = [4]f32{ 0, 0, 0, 0 };
             rect.edge_softness = 0;
-            rect.border_thickness = -1;
+            rect.border_thickness = [4]f32{ -1, -1, -1, -1 };
             try shader_inputs.append(rect);
         }
     }
