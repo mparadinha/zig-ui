@@ -50,6 +50,9 @@ fn solveIndependentSizesWorkFn(_: *UI, node: *Node, axis: Axis) void {
 
     switch (node.size[axis_idx]) {
         .pixels => |pixels| node.calc_size[axis_idx] = pixels.value,
+        .em => |em| {
+            node.calc_size[axis_idx] = node.font_size * em.value;
+        },
         // this is wrong for percent (the correct one is calculated later) but this gives
         // and upper bound on the size, which might be needed for "downward dependent" nodes
         // which have children with `Size.percent`

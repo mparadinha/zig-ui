@@ -538,36 +538,47 @@ pub fn scrollListBegin(ui: *UI, hash: []const u8) void {
         .scroll_children_y = true,
         .clip_children = true,
     }, "{s}_scroll_view_p", .{hash}, [2]UI.Size{
-        UI.Size.percent(1, 0), UI.Size.percent(1, 1),
+        UI.Size.percent(1, 0), UI.Size.percent(1, 0),
     }, .y);
     _ = ui.pushLayoutParentF(.{}, "{s}_list_p", .{hash}, [2]UI.Size{
         UI.Size.children(1), UI.Size.children(1),
     }, .y);
 }
 
+pub const ScrollbarOptions = struct {
+    bg_color: vec4,
+    handle_color: vec4,
+    handle_border_color: ?vec4 = null,
+    handle_corner_radius: f32 = 0,
+    always_show: bool = true, // display bar even when content fully fit the parent
+    size: UI.Size = UI.Size.em(0.5, 1),
+};
 pub fn scrollListEnd(
     ui: *UI,
     hash: []const u8,
-    packet_parent_size: f32, // TODO: could we use scroll_view_parent size instead?
+    opts: ScrollbarOptions,
 ) void {
     const list_parent = ui.popParent();
-    _ = list_parent;
     const scroll_view_parent = ui.popParent();
+
+    const content_size = list_parent.rect.size()[1];
+    const scroll_view_size = scroll_view_parent.rect.size()[1];
+    const scroll_max = content_size - scroll_view_size;
+    const view_pct_of_whole = std.math.clamp(scroll_view_size / content_size, 0, 1);
+    if (view_pct_of_whole >= 1 and !opts.always_show) return;
 
     const scroll_bar = ui.addNodeF(.{
         .clickable = true,
         .draw_background = true,
     }, "{s}_scroll_bar", .{hash}, .{
-        .bg_color = vec4{ 0, 0, 0, 0.75 },
-        .size = UI.Size.exact(.pixels, 16, packet_parent_size),
+        .bg_color = opts.bg_color,
+        .size = [2]UI.Size{ opts.size, UI.Size.pixels(scroll_view_size, 1) },
     });
     ui.pushParent(scroll_bar);
+    defer ui.popParentAssert(scroll_bar);
+
     const mouse_pos = scroll_bar.signal.mouse_pos[1];
     const bar_size = scroll_bar.rect.size()[1];
-    const content_size = scroll_view_parent.first.?.rect.size()[1];
-    const scroll_view_size = scroll_view_parent.rect.size()[1];
-    const scroll_max = content_size - scroll_view_size;
-    const view_pct_of_whole = std.math.clamp(scroll_view_size / content_size, 0, 1);
     const handle_size = view_pct_of_whole * bar_size;
     const half_handle = handle_size / 2;
     const bar_scroll_size = bar_size - handle_size;
@@ -586,19 +597,22 @@ pub fn scrollListEnd(
     }
     const handle_center_pos = half_handle + (1 - scroll_pct) * bar_scroll_size;
     const handle_pos = std.math.clamp(handle_center_pos - half_handle, 0, bar_scroll_size);
+
     const scroll_handle = ui.addNodeF(.{
         // TODO: .clickable = true,
         .draw_background = true,
         .floating_y = true,
     }, "{s}_scroll_handle", .{hash}, .{
-        .bg_color = vec4{ 0.8, 0.8, 0.8, 1 },
+        .bg_color = opts.handle_color,
         .size = [2]UI.Size{ UI.Size.percent(1, 1), UI.Size.pixels(handle_size, 1) },
-        .corner_radii = [4]f32{ 4, 4, 4, 4 },
+        .corner_radii = @as(vec4, @splat(opts.handle_corner_radius)),
         .rel_pos = UI.RelativePlacement.simple(vec2{ 0, handle_pos }),
     });
-    _ = scroll_handle;
+    if (opts.handle_border_color) |border_color| {
+        scroll_handle.flags.draw_border = true;
+        scroll_handle.border_color = border_color;
+    }
     // TODO: clicking on scroll bar is page up/down, current behavior belongs to scroll_handle
-    ui.popParentAssert(scroll_bar);
 }
 
 pub const TextInputState = struct {

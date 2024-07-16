@@ -276,6 +276,7 @@ pub const Style = struct {
 pub const Size = union(enum) {
     pixels: struct { value: f32, strictness: f32 },
     text: struct { strictness: f32 },
+    em: struct { value: f32, strictness: f32 },
     percent: struct { value: f32, strictness: f32 },
     children: struct { strictness: f32 },
 
@@ -284,6 +285,9 @@ pub const Size = union(enum) {
     }
     pub fn text(strictness: f32) Size {
         return Size{ .text = .{ .strictness = strictness } };
+    }
+    pub fn em(value: f32, strictness: f32) Size {
+        return Size{ .em = .{ .value = value, .strictness = strictness } };
     }
     pub fn percent(value: f32, strictness: f32) Size {
         return Size{ .percent = .{ .value = value, .strictness = strictness } };
@@ -303,6 +307,7 @@ pub const Size = union(enum) {
     pub fn exact(tag: Tag, x: f32, y: f32) [2]Size {
         return switch (tag) {
             .pixels => [2]Size{ Size.pixels(x, 1), Size.pixels(y, 1) },
+            .em => [2]Size{ Size.em(x, 1), Size.em(y, 1) },
             .percent => [2]Size{ Size.percent(x, 1), Size.percent(y, 1) },
             else => @panic(""),
         };
@@ -311,6 +316,7 @@ pub const Size = union(enum) {
     pub fn flexible(tag: Tag, x: f32, y: f32) [2]Size {
         return switch (tag) {
             .pixels => [2]Size{ Size.pixels(x, 0), Size.pixels(y, 0) },
+            .em => [2]Size{ Size.em(x, 0), Size.em(y, 0) },
             .percent => [2]Size{ Size.percent(x, 0), Size.percent(y, 0) },
             else => @panic(""),
         };
@@ -337,6 +343,7 @@ pub const Size = union(enum) {
         _ = fmt;
         switch (value) {
             .pixels => |v| try writer.print("pixels({d}, {d})", .{ v.value, v.strictness }),
+            .em => |v| try writer.print("em({d}, {d})", .{ v.value, v.strictness }),
             .text => |v| try writer.print("text({d})", .{v.strictness}),
             .percent => |v| try writer.print("percent({d}, {d})", .{ v.value, v.strictness }),
             .children => |v| try writer.print("children({d})", .{v.strictness}),
