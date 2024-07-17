@@ -689,9 +689,7 @@ pub fn textInputRaw(
         .draw_text = true,
         .floating_x = true,
         .ignore_hash_sep = true,
-    }, display_str, .{
-        .text_color = vec4{ 0, 0, 0, 1 },
-    });
+    }, display_str, .{});
 
     const font_pixel_size = ui.topStyle().font_size;
     const text_padd = ui.textPadding(text_node);
