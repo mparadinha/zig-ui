@@ -596,6 +596,7 @@ pub fn scrollbar(
     opts: ScrollbarOptions,
 ) void {
     const axis_idx: usize = @intFromEnum(axis);
+    const off_axis_idx = 1 - axis_idx;
 
     const scroll_offset: *f32 = &scroll_view_parent.scroll_offset[axis_idx];
 
@@ -604,15 +605,47 @@ pub fn scrollbar(
     const view_pct_of_whole = std.math.clamp(scroll_view_size / content_size, 0, 1);
     if (view_pct_of_whole >= 1 and !opts.always_show) return;
 
+    // parent for the arrow buttons, scroll bar, and scroll handle
+    const scroll_region_p = ui.addNodeF(.{}, "{s}_scroll_p", .{name}, .{
+        .layout_axis = axis,
+        .size = switch (axis) {
+            .x => [2]UI.Size{ UI.Size.pixels(scroll_view_size, 1), opts.size },
+            .y => [2]UI.Size{ opts.size, UI.Size.pixels(scroll_view_size, 1) },
+        },
+    });
+    ui.pushParent(scroll_region_p);
+    defer ui.popParentAssert(scroll_region_p);
+
+    // get the size of the arrow buttons so we can scale them down to fit
+    // nicely into the bar
+    const font_size = ui.topStyle().font_size;
+    const arrow_icon_rect = ui.icon_font.textRect(UI.Icons.up_open, font_size) catch @panic("TODO");
+    const arrow_icon_size = (arrow_icon_rect.max - arrow_icon_rect.min)[off_axis_idx];
+    const off_axis_size = scroll_region_p.rect.size()[off_axis_idx];
+    const scaled_icon_font_size = font_size / (arrow_icon_size / off_axis_size);
+
+    // TODO: fix size of arrow buttons here, they're way too tiny!
+    _ = scaled_icon_font_size;
+    // ui.pushStyle(.{ .font_size = scaled_icon_font_size });
+    ui.pushStyle(.{ .font_size = font_size / 2 }); // TODO: what?
+    defer _ = ui.popStyle();
+    // TODO: UI.Icons should be an enum that we then use to grab codepoints out
+    // of a runtime user-customizable icon font map
+    switch (axis) {
+        .x => _ = ui.iconButton(UI.Icons.left_open),
+        .y => _ = ui.iconButton(UI.Icons.up_open),
+    }
+    defer switch (axis) {
+        .x => _ = ui.iconButton(UI.Icons.right_open),
+        .y => _ = ui.iconButton(UI.Icons.down_open),
+    };
+
     const scroll_bar = ui.addNodeF(.{
         .clickable = true,
         .draw_background = true,
     }, "{s}_bar", .{name}, .{
         .bg_color = opts.bg_color,
-        .size = switch (axis) {
-            .x => [2]UI.Size{ UI.Size.pixels(scroll_view_size, 1), opts.size },
-            .y => [2]UI.Size{ opts.size, UI.Size.pixels(scroll_view_size, 1) },
-        },
+        .size = UI.Size.flexible(.percent, 1, 1),
     });
     ui.pushParent(scroll_bar);
     defer ui.popParentAssert(scroll_bar);
@@ -621,7 +654,9 @@ pub fn scrollbar(
     const bar_size = scroll_bar.rect.size()[axis_idx];
     const handle_size = view_pct_of_whole * bar_size;
     const half_handle = handle_size / 2;
-    const bar_scroll_size = bar_size - handle_size;
+    // TODO: instead of calculating these position values can we use some spacers instead?
+    // that way this @max for 1st frame wouldn't be necessary
+    const bar_scroll_size = @max(bar_size - handle_size, 0); // 1st frame bar_size is 0
     const mouse_scroll_pct =
         if (mouse_pos < half_handle)
         0
