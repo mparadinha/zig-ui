@@ -516,9 +516,67 @@ pub fn endWindow(ui: *UI, window_root: *Node) void {
     ui.popParentAssert(window_root);
 }
 
+pub const ScrollViewSignal = struct {
+    view: Signal,
+    vbar: Signal,
+    hbar: Signal,
+};
+pub const ScrollViewOptions = struct {};
 
+pub fn startScrollView(
+    ui: *UI,
+    flags: UI.Flags,
+    name: []const u8,
+    init_args: anytype,
+) void {
+    const InitArgs = @TypeOf(init_args);
+    // TODO: put these checks into an error buffer that we report all at once at end of build
+    std.debug.assert(@hasField(InitArgs, "size"));
+    std.debug.assert(@TypeOf(init_args.size) == [2]UI.Size);
+    for (init_args.size) |size| {
+        std.debug.assert(size == .pixels or size == .percent);
+        // std.debug.assert(size.getStrictness() == 1);
     }
 
+    const view_p = ui.addNode(flags, name, init_args);
+    view_p.layout_axis = .x;
+    ui.pushParent(view_p);
+
+    const scroll_content_p = ui.addNode(.{
+        .scroll_children_y = true,
+        .clip_children = true,
+    }, "scroll_content_p", .{
+        .size = UI.Size.flexible(.percent, 1, 1),
+    });
+    ui.pushParent(scroll_content_p);
+
+    // this node serves only to store the total size of the children being
+    // scrolled, which we need for calculating the scroll bar sizes
+    const scroll_children_aggregate = ui.addNode(.{}, "scroll_children_aggregate", .{
+        .size = UI.Size.children2(1, 1),
+    });
+    if (@hasField(InitArgs, "layout_axis")) scroll_children_aggregate.layout_axis = init_args.layout_axis;
+    ui.pushParent(scroll_children_aggregate);
+}
+pub fn endScrollView(ui: *UI, opts: ScrollViewOptions) ScrollViewSignal {
+    _ = opts;
+
+    const scroll_children_aggregate = ui.popParent(); // scroll_children_aggregate
+    const scroll_content_p = ui.popParent();
+
+    // vertical bar
+    ui.scrollBar("v_scroll_bar", scroll_children_aggregate, scroll_content_p, .{
+        // TODO: get these from opts
+        .bg_color = ui.base_style.bg_color,
+        .handle_color = ui.base_style.border_color,
+    });
+
+    // TODO: horizontal bar
+
+    _ = ui.popParent(); // view_p
+
+    return std.mem.zeroes(ScrollViewSignal);
+}
 
 pub fn scrollListBegin(ui: *UI, hash: []const u8) void {
     _ = ui.pushLayoutParentF(.{
@@ -591,6 +649,67 @@ pub fn scrollListEnd(
         .draw_background = true,
         .floating_y = true,
     }, "{s}_scroll_handle", .{hash}, .{
+        .bg_color = opts.handle_color,
+        .size = [2]UI.Size{ UI.Size.percent(1, 1), UI.Size.pixels(handle_size, 1) },
+        .corner_radii = @as(vec4, @splat(opts.handle_corner_radius)),
+        .rel_pos = UI.RelativePlacement.simple(vec2{ 0, handle_pos }),
+    });
+    if (opts.handle_border_color) |border_color| {
+        scroll_handle.flags.draw_border = true;
+        scroll_handle.border_color = border_color;
+    }
+    // TODO: clicking on scroll bar is page up/down, current behavior belongs to scroll_handle
+}
+
+pub fn scrollBar(
+    ui: *UI,
+    name: []const u8,
+    list_parent: *Node,
+    scroll_view_parent: *Node,
+    opts: ScrollbarOptions,
+) void {
+    const content_size = list_parent.rect.size()[1];
+    const scroll_view_size = scroll_view_parent.rect.size()[1];
+    const scroll_max = content_size - scroll_view_size;
+    const view_pct_of_whole = std.math.clamp(scroll_view_size / content_size, 0, 1);
+    if (view_pct_of_whole >= 1 and !opts.always_show) return;
+
+    const scroll_bar = ui.addNodeF(.{
+        .clickable = true,
+        .draw_background = true,
+    }, "{s}_bar", .{name}, .{
+        .bg_color = opts.bg_color,
+        .size = [2]UI.Size{ opts.size, UI.Size.pixels(scroll_view_size, 1) },
+    });
+    ui.pushParent(scroll_bar);
+    defer ui.popParentAssert(scroll_bar);
+
+    const mouse_pos = scroll_bar.signal.mouse_pos[1];
+    const bar_size = scroll_bar.rect.size()[1];
+    const handle_size = view_pct_of_whole * bar_size;
+    const half_handle = handle_size / 2;
+    const bar_scroll_size = bar_size - handle_size;
+    const mouse_scroll_pct =
+        if (mouse_pos < half_handle)
+        0
+    else if (mouse_pos > (bar_size - half_handle))
+        1
+    else
+        (mouse_pos - (half_handle)) / bar_scroll_size;
+    var scroll_pct = 1 - std.math.clamp(mouse_scroll_pct, 0, 1);
+    if (scroll_bar.signal.held_down) {
+        scroll_view_parent.scroll_offset[1] = scroll_max * scroll_pct;
+    } else {
+        scroll_pct = scroll_view_parent.scroll_offset[1] / scroll_max;
+    }
+    const handle_center_pos = half_handle + (1 - scroll_pct) * bar_scroll_size;
+    const handle_pos = std.math.clamp(handle_center_pos - half_handle, 0, bar_scroll_size);
+
+    const scroll_handle = ui.addNodeF(.{
+        // TODO: .clickable = true,
+        .draw_background = true,
+        .floating_y = true,
+    }, "{s}_handle", .{name}, .{
         .bg_color = opts.handle_color,
         .size = [2]UI.Size{ UI.Size.percent(1, 1), UI.Size.pixels(handle_size, 1) },
         .corner_radii = @as(vec4, @splat(opts.handle_corner_radius)),

@@ -115,6 +115,12 @@ fn showDemo(
 
     ui.enumTabList(DemoState.Tabs, &state.selected_tab);
 
+    ui.startScrollView(.{}, "demo_tab", .{
+        .size = UI.Size.flexible(.percent, 1, 1),
+        .layout_axis = .y,
+    });
+    defer _ = ui.endScrollView(.{});
+
     switch (state.selected_tab) {
         .Basics => try showDemoTabBasics(ui, state),
         .@"Demo Config" => showDemoTabConfig(ui, state),
