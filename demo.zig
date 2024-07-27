@@ -115,7 +115,9 @@ fn showDemo(
 
     ui.enumTabList(DemoState.Tabs, &state.selected_tab);
 
-    ui.startScrollView(.{}, "demo_tab", .{
+    ui.startScrollView(.{
+        .draw_border = true,
+    }, "demo_tab", .{
         .size = UI.Size.flexible(.percent, 1, 1),
         .layout_axis = .y,
     });

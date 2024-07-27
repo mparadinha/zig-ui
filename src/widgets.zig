@@ -385,9 +385,8 @@ pub fn tabButton(
 
     const tab_sig = ui.subtleButtonF("{s}###title", .{name});
 
-    // TODO: don't display this close btn if `opts.close_btn` is `false`
-    const close_sig = ui.iconButton(UI.Icons.cancel);
-    close_sig.node.?.corner_radii[0] = 0;
+    const close_sig = if (opts.close_btn) ui.iconButton(UI.Icons.cancel) else std.mem.zeroes(Signal);
+    if (close_sig.node) |node| node.corner_radii[0] = 0;
 
     return .{ .tab = tab_sig, .close = close_sig };
 }
