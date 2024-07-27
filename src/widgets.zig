@@ -516,75 +516,9 @@ pub fn endWindow(ui: *UI, window_root: *Node) void {
     ui.popParentAssert(window_root);
 }
 
-/// returns the new parent (which gets pushed on the parent stack) for this region
-// TODO: scrolling in x direction as well
-pub fn startScrollRegion(ui: *UI, hash: []const u8) *Node {
-    const parent = ui.addNodeF(.{
-        .scroll_children_y = true,
-        .clip_children = true,
-    }, "###{s}:scroll_region_parent", .{hash}, .{
-        .layout_axis = .y,
-    });
-    ui.pushParent(parent);
-    return parent;
-}
 
-pub fn endScrollRegion(ui: *UI, parent: *Node, start_scroll: f32, end_scroll: f32) void {
-    const hash = parent.hash_string;
-
-    const bar_node = ui.addNode(.{ .draw_background = true, .no_id = true, .floating_x = true }, "", .{});
-    bar_node.layout_axis = .y;
-    bar_node.size = [2]Size{ Size.children(1), Size.percent(1, 0) };
-    bar_node.bg_color = vec4{ 0, 0, 0, 0.3 };
-    bar_node.rel_pos = RelativePlacement.match(.top_right);
-    {
-        ui.pushParent(bar_node);
-        defer std.debug.assert(ui.popParent() == bar_node);
-
-        const up_btn = ui.subtleIconButtonF("{s}###{s}:up_scroll_btn", .{ Icons.up_open, hash });
-        if (up_btn.held_down) parent.scroll_offset[1] += 50;
-
-        const scroll_bar_region = ui.addNodeF(.{
-            .clickable = true,
-        }, "###{s}:scroll_bar_region", .{hash}, .{});
-        scroll_bar_region.size = [2]Size{ Size.percent(1, 0), Size.percent(1, 0) };
-        {
-            ui.pushParent(scroll_bar_region);
-            defer std.debug.assert(ui.popParent() == scroll_bar_region);
-
-            const scroll_size = end_scroll - start_scroll;
-            const bar_region_size = scroll_bar_region.rect.size()[1];
-            const mouse_bar_pct = (scroll_bar_region.rect.max[1] - ui.mouse_pos[1]) / bar_region_size;
-            const bar_pct = clamp(mouse_bar_pct, 0, 1);
-
-            if (scroll_bar_region.signal.held_down) {
-                parent.scroll_offset[1] = (scroll_size * bar_pct) + start_scroll;
-            }
-
-            const bar_icon_node = ui.addNodeF(.{
-                .draw_text = true,
-                .floating_y = true,
-            }, "{s}###{s}:bar_btn", .{ Icons.circle, hash }, .{
-                .font_type = .icon,
-            });
-            const icon_size = bar_icon_node.text_rect.size()[1];
-            bar_icon_node.rel_pos = RelativePlacement.match(.top_left);
-            bar_icon_node.rel_pos.diff[1] = if (bar_region_size > 0) blk: {
-                const scroll_pct = clamp((parent.scroll_offset[1] - start_scroll) / scroll_size, 0, 1);
-                break :blk -clamp(
-                    (bar_region_size * scroll_pct) - (icon_size / 2),
-                    0,
-                    bar_region_size - icon_size,
-                );
-            } else 0;
-        }
-
-        const down_btn = ui.subtleIconButtonF("{s}###{s}:down_scroll_btn", .{ Icons.down_open, hash });
-        if (down_btn.held_down) parent.scroll_offset[1] -= 50;
     }
 
-    ui.popParentAssert(parent);
-}
 
 pub fn scrollListBegin(ui: *UI, hash: []const u8) void {
     _ = ui.pushLayoutParentF(.{
