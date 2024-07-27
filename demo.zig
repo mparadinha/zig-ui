@@ -119,7 +119,10 @@ fn showDemo(
         .size = UI.Size.flexible(.percent, 1, 1),
         .layout_axis = .y,
     });
-    defer _ = ui.endScrollView(.{});
+    defer _ = ui.endScrollView(.{
+        .bg_color = ui.base_style.bg_color,
+        .handle_color = ui.base_style.border_color,
+    });
 
     switch (state.selected_tab) {
         .Basics => try showDemoTabBasics(ui, state),
