@@ -389,6 +389,23 @@ pub const Rect = struct {
         return (Placement{ .btm_left = self.min }).convertTo(place, self.size()).value();
     }
 
+    pub fn clamp(self: Rect, other: Rect) Rect {
+        const max_overflow = @max(vec2{ 0, 0 }, self.max - other.max);
+        var clamped = self.offset(-max_overflow);
+        const min_overflow = @min(vec2{ 0, 0 }, self.min - other.min);
+        clamped = clamped.offset(-min_overflow);
+        return Rect.intersection(clamped, other);
+    }
+
+    pub fn offset(self: Rect, diff: vec2) Rect {
+        return .{ .min = self.min + diff, .max = self.max + diff };
+    }
+
+    /// scale rect while keeping center in the same place
+    pub fn scale(self: Rect, mult: vec2) Rect {
+        return Rect.at(.{ .center = self.get(.center) }, self.size() * mult);
+    }
+
     pub fn intersection(self: Rect, other: Rect) Rect {
         const highest_min = @max(self.min, other.min);
         const lowest_max = @min(self.max, other.max);
@@ -953,7 +970,10 @@ pub fn computeSignalFromNode(self: *UI, node: *Node) !Signal {
 
     // mouse dragging
     signal.drag_start = signal.mouse_pos;
-    if (signal.held_down or signal.released) signal.drag_start = node.signal.drag_start;
+    if (signal.held_down or signal.released) {
+        // TODO: maybe we should store this state in the node itself not the signal?
+        signal.drag_start = node.signal.drag_start;
+    }
 
     // set/reset the hot and active keys
     if (is_hot and self.hot_node_key == null) self.hot_node_key = node_key;

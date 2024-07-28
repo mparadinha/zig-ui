@@ -66,7 +66,7 @@ pub fn main() !void {
 }
 
 const DemoState = struct {
-    selected_tab: Tabs = .Basics,
+    selected_tab: Tabs = .@"Demo Config",
 
     clear_color: vec4 = vec4{ 0, 0, 0, 0.9 },
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
@@ -83,7 +83,7 @@ const DemoState = struct {
     zoom_region: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
 
     show_debug_stats: bool = true,
-    show_zoom: bool = false,
+    show_zoom: bool = true,
 
     const Tabs = enum {
         Basics,
@@ -169,6 +169,7 @@ fn showDemo(
     // [ ] add a toggle to add show the pixel grid when zoomed in (and maybe show the pixel coords as well)
     // [ ] display as part of the zoom display a little box with the current zoom level
     // TODO: check that `UI.Rect.at` isn't bugged
+    const os_window_size = ui.root.?.rect;
     if (state.show_zoom) {
         const zoom_widget = ui.startWindow(
             "zoom_widget",
@@ -182,23 +183,71 @@ fn showDemo(
             ui.labelF("zoom_widget drag vector: {d}", .{sig.mouse_pos - sig.drag_start});
         }
 
+        ui.pushTmpStyle(.{ .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) } });
         if (ui.button("Select zoom region (press <ESC> to cancel)").clicked) {
             // TODO: only replace the selected region when we start dragging
             state.zoom_region = std.mem.zeroes(UI.Rect);
             state.zoom_selecting_region = true;
         }
 
-        const zoom_display_box = ui.addNode(.{
-            .clickable = true,
-            .scroll_children_y = true, // just so we receive scroll inputs for zooming in/out
-        }, "zoom_display_box", .{
-            .size = UI.Size.exact(.pixels, 400, 400),
-        });
-        // TODO: drag inside display box to change pan zoomed region around
-        // TODO: scroll inside display box to zoom in/out, centered on mouse position
-        ui.labelF("{d}", .{zoom_display_box.signal.dragOffset()});
+        ui.pushTmpStyle(.{ .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) } });
+        if (ui.button("Square zoom region").clicked) {
+            const size = state.zoom_region.size();
+            const side_len = @max(size[0], size[1]);
+            state.zoom_region.max = state.zoom_region.min + vec2{ side_len, side_len };
+        }
 
-        state.zoom_display = zoom_display_box.rect;
+        {
+            const display_box_size = 400;
+
+            const coord_label = (struct {
+                pub fn func(_ui: *UI, _coords: vec2) void {
+                    _ui.labelF("{d:>4.0},{d:>4.0}", .{ _coords[0], _coords[1] });
+                }
+            }).func;
+
+            ui.startLine();
+            ui.pushStyle(.{ .font_size = 16 });
+            coord_label(ui, state.zoom_region.get(.top_left));
+            ui.spacer(.x, UI.Size.pixels(display_box_size, 1));
+            coord_label(ui, state.zoom_region.get(.top_right));
+            _ = ui.popStyle();
+            ui.endLine();
+
+            const zoom_display_box = ui.addNode(.{
+                .clickable = true,
+                .scroll_children_y = true, // just so we receive scroll inputs for zooming in/out
+            }, "zoom_display_box", .{
+                .size = UI.Size.exact(.pixels, display_box_size, display_box_size),
+                .alignment = .center,
+                .scroll_multiplier = vec2{ 1, 1 },
+            });
+            state.zoom_display = zoom_display_box.rect;
+            const display_sig = zoom_display_box.signal;
+            if (@reduce(.And, state.zoom_region.size() != vec2{ 0, 0 })) {
+                const display_drag = display_sig.dragOffset();
+
+                // drag inside display box to move zoomed region around
+                const px_scale = state.zoom_region.size() / zoom_display_box.rect.size();
+                const px_drag = display_drag * px_scale;
+                state.zoom_region = state.zoom_region.offset(-px_drag);
+                zoom_display_box.signal.drag_start = zoom_display_box.signal.mouse_pos;
+
+                // scroll inside display box to zoom in/out, centered on mouse position
+                const scale = 1 - 0.1 * display_sig.scroll_amount[1];
+                state.zoom_region = state.zoom_region.scale(@splat(scale));
+            }
+
+            ui.startLine();
+            ui.pushStyle(.{ .font_size = 16 });
+            coord_label(ui, state.zoom_region.get(.btm_left));
+            ui.spacer(.x, UI.Size.pixels(display_box_size, 1));
+            coord_label(ui, state.zoom_region.get(.btm_right));
+            _ = ui.popStyle();
+            ui.endLine();
+        }
+
+        state.zoom_region = state.zoom_region.clamp(os_window_size);
     }
     if (state.zoom_selecting_region) {
         if (ui.events.searchAndRemove(.KeyDown, .{ .mods = .{}, .key = .escape }))
@@ -233,7 +282,7 @@ fn showDemo(
         if (!selection_zone.signal.held_down and !empty_selection) {
             state.zoom_selecting_region = false;
         } else {
-            state.zoom_region = selected_rect.intersection(ui.root.?.rect);
+            state.zoom_region = selected_rect.intersection(os_window_size);
             ui.box(state.zoom_region, .{
                 .bg_color = vec4{ 1, 1, 1, 0.3 },
                 .border_color = vec4{ 1, 1, 1, 0.8 },
