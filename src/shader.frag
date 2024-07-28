@@ -94,21 +94,29 @@ void main() {
     vec4 corner_radii = fs_in.corner_radii;
     float softness = fs_in.edge_softness;
     vec4 borders_thickness = fs_in.border_thickness;
+
     uint enabled_borders = enabledBorders(borders_thickness);
     uint current_borders = currentBorders(pixel_coord, rect_center, rect_half_size, borders_thickness);
     float thickness = selectThickness(current_borders, borders_thickness);
     bool is_border_enabled = (current_borders & enabled_borders) != 0u;
 
+    vec2 rect_min = rect_center - rect_half_size;
+    vec2 rect_max = rect_center + rect_half_size;
+
+    // 0 = fully outside, 1 = fully inside, ]0,1[ = rect border somewhere in this pixel
+    float inside_rect_pct = 1 - clamp(rectSDF(pixel_coord, rect_center, rect_half_size), 0, 1);
+    bool inside_clip_rect = rectContains(fs_in.clip_rect_min, fs_in.clip_rect_max, pixel_coord);
+    bool has_rounded_corners = (corner_radii == vec4(0));
+    bool has_borders = borders_thickness != vec4(-1);
+
     FragColor = vec4(0);
 
     // clipping
-    if (!rectContains(fs_in.clip_rect_min, fs_in.clip_rect_max, pixel_coord)) {
-        return;
-    }
+    if (!inside_clip_rect) { return; }
 
-    if (borders_thickness != vec4(-1) && !is_border_enabled) {
+    if (has_borders && !is_border_enabled) {
         // TODO: fix enabling/disabling of borders when corners are rounded
-        if (corner_radii == vec4(0)) {
+        if (has_rounded_corners) {
             return;
         } else {
             thickness = borders_thickness[0];
@@ -118,11 +126,11 @@ void main() {
     float rect_dist = roundedRectSDF(pixel_coord, rect_center, rect_half_size, corner_radii);
     if (thickness >= 0) rect_dist = toBorder(rect_dist, -(thickness / 2), thickness);
 
-    FragColor = rect_color;
+    vec4 color = rect_color;
     if (softness != 0) {
-        FragColor.a *= smoothstep(-softness, softness, -rect_dist);
+        color.a *= smoothstep(-softness, softness, -rect_dist);
     } else if (rect_dist > 0) {
-        FragColor.a = 0;
+        color.a = 0;
     }
 
     float tex_alpha = 1;
@@ -131,5 +139,8 @@ void main() {
         case 1u: tex_alpha = texture(text_bold_atlas, fs_in.uv).r; break;
         case 2u: tex_alpha = texture(icon_atlas, fs_in.uv).r; break;
     }
-    if (fs_in.uv != vec2(0, 0)) FragColor.a = tex_alpha;
+    if (fs_in.uv != vec2(0, 0) && inside_rect_pct != 0) color.a = tex_alpha;
+
+    FragColor = color;
 }
+

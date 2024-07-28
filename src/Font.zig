@@ -242,7 +242,7 @@ fn setupPacking(self: *Font, texture_size: u32) !void {
         1, // padding between characters
         null,
     ) == 1);
-    //c.stbtt_PackSetOversampling(&self.packing_ctx, 2, 2);
+    c.stbtt_PackSetOversampling(&self.packing_ctx, 2, 2);
 }
 
 fn resetPacking(self: *Font) void {

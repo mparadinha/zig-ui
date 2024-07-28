@@ -1013,9 +1013,7 @@ pub fn computeSignalFromNode(self: *UI, node: *Node) !Signal {
 }
 
 pub fn textPadding(_: *UI, node: *Node) vec2 {
-    // TODO: I'm not sure the `@round` should be here. I think this is same problem
-    //       as the text appearing fuzzy on certain specific window resolutions
-    return @splat(@round(node.font_size * 0.2));
+    return @splat(node.font_size * 0.2);
 }
 
 /// calculate the origin of a node's text box in absolute coordinates

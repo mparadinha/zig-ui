@@ -66,7 +66,7 @@ pub fn main() !void {
 }
 
 const DemoState = struct {
-    selected_tab: Tabs = .@"Demo Config",
+    selected_tab: Tabs = .Basics,
 
     clear_color: vec4 = vec4{ 0, 0, 0, 0.9 },
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
@@ -79,11 +79,12 @@ const DemoState = struct {
     current_tabs: std.ArrayList(usize),
 
     zoom_selecting_region: bool = false,
+    zoom_snap_to_pixel: bool = false,
     zoom_display: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
     zoom_region: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
 
     show_debug_stats: bool = true,
-    show_zoom: bool = true,
+    show_zoom: bool = false,
 
     const Tabs = enum {
         Basics,
@@ -230,8 +231,10 @@ fn showDemo(
                 // drag inside display box to move zoomed region around
                 const px_scale = state.zoom_region.size() / zoom_display_box.rect.size();
                 const px_drag = display_drag * px_scale;
-                state.zoom_region = state.zoom_region.offset(-px_drag);
-                zoom_display_box.signal.drag_start = zoom_display_box.signal.mouse_pos;
+                if (!state.zoom_snap_to_pixel or @abs(px_drag[0]) >= 1 or @abs(px_drag[1]) >= 1) {
+                    state.zoom_region = state.zoom_region.offset(-px_drag);
+                    zoom_display_box.signal.drag_start = zoom_display_box.signal.mouse_pos;
+                }
 
                 // scroll inside display box to zoom in/out, centered on mouse position
                 const scale = 1 - 0.1 * display_sig.scroll_amount[1];
@@ -247,7 +250,13 @@ fn showDemo(
             ui.endLine();
         }
 
+        _ = ui.checkBox("Snap to pixel grid", &state.zoom_snap_to_pixel);
+
         state.zoom_region = state.zoom_region.clamp(os_window_size);
+        if (state.zoom_snap_to_pixel) {
+            state.zoom_region.min = @round(state.zoom_region.min);
+            state.zoom_region.max = @round(state.zoom_region.max);
+        }
     }
     if (state.zoom_selecting_region) {
         if (ui.events.searchAndRemove(.KeyDown, .{ .mods = .{}, .key = .escape }))

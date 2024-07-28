@@ -367,7 +367,7 @@ pub fn tabButton(
     ui.pushStyle(.{
         .bg_color = if (selected) opts.active_tab_bg else opts.inactive_tab_bg,
         .border_color = @as(vec4, @splat(0.5)),
-        .corner_radii = [4]f32{ 10, 10, 0, 0 },
+        .corner_radii = [4]f32{ 8, 8, 0, 0 },
     });
     defer _ = ui.popStyle();
 
