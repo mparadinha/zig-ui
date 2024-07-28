@@ -106,7 +106,14 @@ void main() {
         return;
     }
 
-    if (borders_thickness != vec4(-1) && !is_border_enabled) return;
+    if (borders_thickness != vec4(-1) && !is_border_enabled) {
+        // TODO: fix enabling/disabling of borders when corners are rounded
+        if (corner_radii == vec4(0)) {
+            return;
+        } else {
+            thickness = borders_thickness[0];
+        }
+    }
 
     float rect_dist = roundedRectSDF(pixel_coord, rect_center, rect_half_size, corner_radii);
     if (thickness >= 0) rect_dist = toBorder(rect_dist, -(thickness / 2), thickness);
