@@ -78,6 +78,7 @@ const DemoState = struct {
     selected_tab_idx: usize = 0,
     current_tabs: std.ArrayList(usize),
 
+    zoom_selecting_region: bool = false,
     zoom_display: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
     zoom_region: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
 
@@ -169,13 +170,75 @@ fn showDemo(
     // [ ] display as part of the zoom display a little box with the current zoom level
     // TODO: check that `UI.Rect.at` isn't bugged
     if (state.show_zoom) {
-        const root_size = ui.root.?.rect.size();
+        const zoom_widget = ui.startWindow(
+            "zoom_widget",
+            UI.Size.children2(1, 1),
+            UI.RelativePlacement.offset(.btm_right, vec2{ -4, 4 }),
+        );
+        defer ui.endWindow(zoom_widget);
+        // TODO: drag `zoom_widget` to move it to a different place in the OS window
+        if (false) {
+            const sig = zoom_widget.signal;
+            ui.labelF("zoom_widget drag vector: {d}", .{sig.mouse_pos - sig.drag_start});
+        }
 
-        state.zoom_display = UI.Rect{ .min = @splat(0), .max = root_size / vec2{ 2, 2 } };
-        state.zoom_region = UI.Rect{
-            .min = vec2{ 0, root_size[1] / 2 },
-            .max = vec2{ root_size[0] / 2, root_size[1] },
+        if (ui.button("Select zoom region (press <ESC> to cancel)").clicked) {
+            // TODO: only replace the selected region when we start dragging
+            state.zoom_region = std.mem.zeroes(UI.Rect);
+            state.zoom_selecting_region = true;
+        }
+
+        const zoom_display_box = ui.addNode(.{
+            .clickable = true,
+            .scroll_children_y = true, // just so we receive scroll inputs for zooming in/out
+        }, "zoom_display_box", .{
+            .size = UI.Size.exact(.pixels, 400, 400),
+        });
+        // TODO: drag inside display box to change pan zoomed region around
+        // TODO: scroll inside display box to zoom in/out, centered on mouse position
+        ui.labelF("{d}", .{zoom_display_box.signal.dragOffset()});
+
+        state.zoom_display = zoom_display_box.rect;
+    }
+    if (state.zoom_selecting_region) {
+        if (ui.events.searchAndRemove(.KeyDown, .{ .mods = .{}, .key = .escape }))
+            state.zoom_selecting_region = false;
+
+        const selection_window = ui.startWindow(
+            "zoom_selection_window",
+            UI.Size.exact(.percent, 1, 1),
+            UI.RelativePlacement.match(.center),
+        );
+        defer ui.endWindow(selection_window);
+
+        const selection_zone = ui.addNode(.{
+            .draw_background = true,
+            .clickable = true,
+        }, "selection_zone", .{
+            .bg_color = vec4{ 0, 0, 0, 0.2 },
+            .size = UI.Size.exact(.percent, 1, 1),
+        });
+        ui.pushParent(selection_zone);
+        defer ui.popParentAssert(selection_zone);
+        const selected_rect = blk: {
+            const rect = selection_zone.signal.dragRect();
+            break :blk rect;
+            // TODO: square the selection rectangle
+            // const size = rect.size();
+            // const max_size = @max(size[0], size[1]);
+            // break :blk UI.Rect{ .min = rect.min, .max = rect.min + vec2{ max_size, max_size } };
         };
+
+        const empty_selection = @reduce(.And, state.zoom_region.size() == vec2{ 0, 0 });
+        if (!selection_zone.signal.held_down and !empty_selection) {
+            state.zoom_selecting_region = false;
+        } else {
+            state.zoom_region = selected_rect.intersection(ui.root.?.rect);
+            ui.box(state.zoom_region, .{
+                .bg_color = vec4{ 1, 1, 1, 0.3 },
+                .border_color = vec4{ 1, 1, 1, 0.8 },
+            });
+        }
     }
 
     // show at the end, to get more accurate stats for this frame
@@ -383,49 +446,69 @@ fn showDemoTabConfig(ui: *UI, state: *DemoState) void {
 fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void {
     const save_screenshot = false;
 
-    const tex_quad_shader = try gfx.Shader.from_srcs(allocator, "textured_quad", .{
-        .vertex =
-        \\#version 330 core
-        \\layout (location = 0) in vec2 in_pos;
-        \\uniform vec2 size;
-        \\uniform vec2 btm_left;
-        \\uniform vec2 uv_size;
-        \\uniform vec2 uv_btm_left;
-        \\out vec2 pass_uv;
-        \\void main() {
-        \\    gl_Position = vec4((in_pos * size) + btm_left, 0, 1);
-        \\    pass_uv = (in_pos * uv_size) + uv_btm_left;
-        \\}
-        ,
-        .fragment =
-        \\#version 330 core
-        \\in vec2 pass_uv;
-        \\uniform sampler2D img;
-        \\out vec4 color;
-        \\void main() { color = vec4(texture(img, pass_uv).rgb, 1); }
-        ,
-    });
-    defer tex_quad_shader.deinit();
-    // TODO: just recreate mesh every frame and use the vert data instead of all those uniforms
-    const tex_quad_mesh = gfx.Mesh.init(
-        &.{ 0, 0, 1, 0, 1, 1, 0, 1 },
-        &.{ 0, 1, 2, 0, 2, 3 },
-        &.{.{ .n_elems = 2 }},
-    );
-    defer tex_quad_mesh.deinit();
-    const uv_size = vec2{ 1, 1 };
-    const uv_btm_left = vec2{ 0, 0 };
-
     const bytes = try allocator.alloc(u8, 4 * fbsize[0] * fbsize[1]);
     defer allocator.free(bytes);
     gl.readPixels(0, 0, @intCast(fbsize[0]), @intCast(fbsize[1]), gl.RGBA, gl.UNSIGNED_BYTE, @ptrCast(bytes));
+
+    blk: {
+        const tex_quad_shader = gfx.Shader.from_files(allocator, "textured_quad", .{
+            .vertex = "test_zoom.vert",
+            .fragment = "test_zoom.frag",
+        }) catch break :blk;
+        // const tex_quad_shader = try gfx.Shader.from_srcs(allocator, "textured_quad", .{
+        //     .vertex =
+        //     \\#version 330 core
+        //     \\layout (location = 0) in vec2 in_pos;
+        //     \\uniform vec2 size;
+        //     \\uniform vec2 btm_left;
+        //     \\uniform vec2 uv_size;
+        //     \\uniform vec2 uv_btm_left;
+        //     \\out vec2 pass_uv;
+        //     \\void main() {
+        //     \\    gl_Position = vec4((in_pos * size) + btm_left, 0, 1);
+        //     \\    pass_uv = (in_pos * uv_size) + uv_btm_left;
+        //     \\}
+        //     ,
+        //     .fragment =
+        //     \\#version 330 core
+        //     \\in vec2 pass_uv;
+        //     \\uniform sampler2D img;
+        //     \\out vec4 color;
+        //     \\void main() { color = vec4(texture(img, pass_uv).rgb, 1); }
+        //     ,
+        // });
+        defer tex_quad_shader.deinit();
+        // TODO: just recreate mesh every frame and use the vert data instead of all those uniforms
+        const tex_quad_mesh = gfx.Mesh.init(
+            &.{ 0, 0, 1, 0, 1, 1, 0, 1 },
+            &.{ 0, 1, 2, 0, 2, 3 },
+            &.{.{ .n_elems = 2 }},
+        );
+        defer tex_quad_mesh.deinit();
+
+        var tex_quad_tex = gfx.Texture.init(fbsize[0], fbsize[1], gl.RGBA, bytes, gl.TEXTURE_2D, &.{
+            .{ .name = gl.TEXTURE_MIN_FILTER, .value = gl.LINEAR },
+            .{ .name = gl.TEXTURE_MAG_FILTER, .value = gl.NEAREST },
+        });
+        defer tex_quad_tex.deinit();
+        tex_quad_shader.bind();
+        const window_size: vec2 = @floatFromInt(fbsize);
+        tex_quad_shader.set("total_size", window_size);
+        tex_quad_shader.set("region_size", demo.zoom_region.size());
+        tex_quad_shader.set("region_btm_left", demo.zoom_region.min);
+        tex_quad_shader.set("display_size", demo.zoom_display.size());
+        tex_quad_shader.set("display_btm_left", demo.zoom_display.min);
+        tex_quad_shader.set("img", @as(i32, 0));
+        tex_quad_tex.bind(0);
+        tex_quad_mesh.draw();
+    }
 
     if (save_screenshot) {
         const file = try std.fs.cwd().createFile("screenshot.ppm", .{});
         defer file.close();
         const writer = file.writer();
         try writer.print("P6\n{} {}\n255\n", .{ fbsize[0], fbsize[1] });
-        const ppm_bytes = try allocator.alloc(u8, 4 * fbsize[0] * fbsize[1]);
+        const ppm_bytes = try allocator.alloc(u8, 3 * fbsize[0] * fbsize[1]);
         defer allocator.free(ppm_bytes);
         var i: usize = 0;
         for (0..fbsize[1]) |row| {
@@ -439,26 +522,5 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
         }
         _ = try file.write(ppm_bytes);
         std.debug.print("saved screenshot to 'screenshot.ppm'\n", .{});
-    }
-
-    {
-        var tex_quad_tex = gfx.Texture.init(fbsize[0], fbsize[1], gl.RGBA, bytes, gl.TEXTURE_2D, &.{
-            .{ .name = gl.TEXTURE_MIN_FILTER, .value = gl.LINEAR },
-            .{ .name = gl.TEXTURE_MAG_FILTER, .value = gl.NEAREST },
-        });
-        defer tex_quad_tex.deinit();
-        tex_quad_shader.bind();
-        const window_size: vec2 = @floatFromInt(fbsize);
-        const quad_size = demo.zoom_display.size() / window_size;
-        const btm_left = demo.zoom_display.min / window_size;
-        const ndc_quad_size = vec2{ 2, 2 } * quad_size;
-        const ndc_btm_left = vec2{ 2, 2 } * btm_left - vec2{ 1, 1 };
-        tex_quad_shader.set("size", ndc_quad_size);
-        tex_quad_shader.set("btm_left", ndc_btm_left);
-        tex_quad_shader.set("uv_size", uv_size);
-        tex_quad_shader.set("uv_btm_left", uv_btm_left);
-        tex_quad_shader.set("img", @as(i32, 0));
-        tex_quad_tex.bind(0);
-        tex_quad_mesh.draw();
     }
 }

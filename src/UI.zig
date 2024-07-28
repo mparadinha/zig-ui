@@ -471,6 +471,10 @@ pub const RelativePlacement = struct {
         return .{ .target = tag, .anchor = tag };
     }
 
+    pub fn offset(tag: Placement.Tag, diff: vec2) RelativePlacement {
+        return .{ .target = tag, .anchor = tag, .diff = diff };
+    }
+
     pub fn simple(diff: vec2) RelativePlacement {
         return .{ .target = .btm_left, .anchor = .btm_left, .diff = diff };
     }
@@ -505,11 +509,24 @@ pub const Signal = struct {
     hovering: bool = false,
     held_down: bool = false,
     enter_pressed: bool = false,
-    mouse_pos: vec2, // these are relative to bottom-left corner of node
-    // mouse_drag: ?Rect, // relative coordinates, just like `Signal.mouse_pos`
-    scroll_amount: vec2 = undefined, // positive means scrolling up/left
+    scroll_amount: vec2 = vec2{ 0, 0 }, // positive means scrolling up/left
     focused: bool = false,
     toggled: bool = false,
+
+    // these are relative to bottom-left corner of node
+    mouse_pos: vec2 = vec2{ 0, 0 },
+    drag_start: vec2 = vec2{ 0, 0 },
+
+    pub fn dragRect(signal: Signal) Rect {
+        return .{
+            .min = @min(signal.drag_start, signal.mouse_pos),
+            .max = @max(signal.drag_start, signal.mouse_pos),
+        };
+    }
+
+    pub fn dragOffset(signal: Signal) vec2 {
+        return signal.mouse_pos - signal.drag_start;
+    }
 };
 
 pub fn addNode(self: *UI, flags: Flags, string: []const u8, init_args: anytype) *Node {
@@ -839,15 +856,14 @@ pub fn endBuild(self: *UI, dt: f32) void {
 fn computeSignalsForTree(self: *UI, root: *Node) !void {
     var node_iterator = InputOrderNodeIterator.init(root);
     while (node_iterator.next()) |node| {
-        node.signal = try self.computeNodeSignal(node);
+        node.signal = try self.computeSignalFromNode(node);
     }
 }
 
-pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
+pub fn computeSignalFromNode(self: *UI, node: *Node) !Signal {
     var signal = Signal{
         .node = node,
         .mouse_pos = self.mouse_pos - node.rect.min,
-        // .mouse_drag = null,
     };
 
     const clipped_rect = Rect.intersection(node.clip_rect, node.rect);
@@ -934,6 +950,10 @@ pub fn computeNodeSignal(self: *UI, node: *Node) !Signal {
     }
 
     signal.focused = is_focused;
+
+    // mouse dragging
+    signal.drag_start = signal.mouse_pos;
+    if (signal.held_down or signal.released) signal.drag_start = node.signal.drag_start;
 
     // set/reset the hot and active keys
     if (is_hot and self.hot_node_key == null) self.hot_node_key = node_key;
