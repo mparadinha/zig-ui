@@ -115,7 +115,7 @@ fn showDemo(
     ui.pushParent(demo_p);
     defer ui.popParentAssert(demo_p);
 
-    ui.enumTabList(DemoState.Tabs, &state.selected_tab);
+    _ = ui.enumTabList(DemoState.Tabs, &state.selected_tab);
 
     ui.startScrollView(.{
         .draw_border = true,

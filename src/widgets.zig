@@ -391,18 +391,28 @@ pub fn tabButton(
     return .{ .tab = tab_sig, .close = close_sig };
 }
 
-pub fn enumTabList(ui: *UI, comptime T: type, selected_tab: *T) void {
+pub fn enumTabList(ui: *UI, comptime T: type, selected_tab: *T) struct {
+    sig: Signal,
+    tab_value: T,
+} {
     ui.startTabList();
     defer ui.endTabList();
+
+    var sig = Signal{ .node = null, .mouse_pos = undefined };
+    var tab_value: T = undefined;
 
     inline for (@typeInfo(T).Enum.fields) |field| {
         const enum_val: T = @enumFromInt(field.value);
         const is_selected = (selected_tab.* == enum_val);
         const tab_sig = ui.tabButton(field.name, is_selected, .{ .close_btn = false });
         if (tab_sig.tab.clicked) selected_tab.* = enum_val;
+        if (tab_sig.tab.hovering) {
+            sig = tab_sig.tab;
+            tab_value = enum_val;
+        }
     }
 
-    // TODO: return a signal? if one the tab buttons was clicked, etc
+    return .{ .sig = sig, .tab_value = tab_value };
 }
 
 /// pushes a new node as parent that is meant only for layout purposes
