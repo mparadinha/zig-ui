@@ -144,5 +144,8 @@ void main() {
     if (fs_in.uv != vec2(0, 0) && inside_rect_pct != 0) color.a = tex_alpha;
 
     FragColor = color;
+    // @debug
+    // FragColor = vec4(1, 0, 1, 1);
+    // if (inside_rect_pct == 1) FragColor = color;
 }
 

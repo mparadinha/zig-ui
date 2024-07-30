@@ -155,18 +155,21 @@ pub fn deinit(self: *UI) void {
 }
 
 pub const Flags = packed struct {
+    // interactivity flags
     clickable: bool = false,
     selectable: bool = false, // maintains focus when clicked
     toggleable: bool = false, // like `clickable` but `Signal.toggled` is also used
     scroll_children_x: bool = false,
     scroll_children_y: bool = false,
 
+    // rendering flags
     clip_children: bool = false,
     draw_text: bool = false,
     draw_border: bool = false,
     draw_background: bool = false,
     draw_hot_effects: bool = false,
     draw_active_effects: bool = false,
+    disable_text_truncation: bool = false,
 
     // node is not taken into account in the normal layout
     floating_x: bool = false,

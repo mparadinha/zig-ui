@@ -235,7 +235,9 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
     }
 
     // draw text
-    if (node.flags.draw_text) {
+    if (node.flags.draw_text) blk: {
+        if (node.display_string.len == 0) break :blk;
+
         const font = switch (node.font_type) {
             .text => &self.font,
             .text_bold => &self.font_bold,
@@ -249,10 +251,10 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
 
         const display_text = if (estimateLineCount(node, font.*) < 100)
             node.display_string
-        else blk: {
+        else text: {
             const res = largeInputOptimizationVisiblePartOfText(self, node);
             text_base[1] -= res.offset;
-            break :blk res.string;
+            break :text res.string;
         };
 
         const arena = self.build_arena.allocator();
@@ -261,21 +263,53 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         // of this buffer we can actually recoupe the memory (which is great given
         // that this buffer can become quite large
         defer arena.free(quads);
+        const ellipsis_quads = try font.buildQuads(arena, "...", node.font_size);
+        defer arena.free(ellipsis_quads); // this buffer is tiny, but might as well free it since we can
+
+        const ellipsis_width = ellipsis_quads[2].points[2].pos[0];
+        const max_node_text_x = node.rect.max[0] - node.inner_padding[0];
+        const max_x_before_ellipsis = max_node_text_x - ellipsis_width;
+        const text_width = quads[quads.len - 1].points[2].pos[0];
+        const needs_truncation = (text_width > max_node_text_x) and !node.flags.disable_text_truncation;
+
+        var base_text_rect = base_rect;
+        base_text_rect.top_left_color = node.text_color;
+        base_text_rect.btm_left_color = node.text_color;
+        base_text_rect.top_right_color = node.text_color;
+        base_text_rect.btm_right_color = node.text_color;
+        base_text_rect.corner_radii = [4]f32{ 0, 0, 0, 0 };
+        base_text_rect.edge_softness = 0;
+        base_text_rect.border_thickness = [4]f32{ -1, -1, -1, -1 };
         for (quads) |quad| {
             const quad_rect = Rect{ .min = quad.points[0].pos, .max = quad.points[2].pos };
-            var rect = base_rect;
+            var rect = base_text_rect;
             rect.btm_left_pos = text_base + quad_rect.min;
             rect.top_right_pos = text_base + quad_rect.max;
             rect.btm_left_uv = quad.points[0].uv;
             rect.top_right_uv = quad.points[2].uv;
-            rect.top_left_color = node.text_color;
-            rect.btm_left_color = node.text_color;
-            rect.top_right_color = node.text_color;
-            rect.btm_right_color = node.text_color;
-            rect.corner_radii = [4]f32{ 0, 0, 0, 0 };
-            rect.edge_softness = 0;
-            rect.border_thickness = [4]f32{ -1, -1, -1, -1 };
-            try shader_inputs.append(rect);
+
+            // check if text truncation is needed
+            if (needs_truncation and rect.top_right_pos[0] > max_x_before_ellipsis) {
+                // drawing this last clipped char looks weird
+                // // draw this last character, but clip it to allow for ellipsis without overlaps
+                // rect.clip_rect_max[0] = max_x_before_ellipsis;
+                // try shader_inputs.append(rect);
+
+                // draw ellpsis and ignore the rest of the characters
+                // const ell_text_base = vec2{ max_x_before_ellipsis, text_base[1] };
+                const ell_text_base = vec2{ rect.btm_left_pos[0], text_base[1] };
+                for (ellipsis_quads) |ell_quad| {
+                    rect = base_text_rect;
+                    rect.btm_left_pos = ell_text_base + ell_quad.points[0].pos;
+                    rect.top_right_pos = ell_text_base + ell_quad.points[2].pos;
+                    rect.btm_left_uv = ell_quad.points[0].uv;
+                    rect.top_right_uv = ell_quad.points[2].uv;
+                    try shader_inputs.append(rect);
+                }
+                break;
+            } else {
+                try shader_inputs.append(rect);
+            }
         }
     }
 }

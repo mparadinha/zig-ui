@@ -239,7 +239,7 @@ fn setupPacking(self: *Font, texture_size: u32) !void {
         @intCast(self.texture.width),
         @intCast(self.texture.height),
         0,
-        1, // padding between characters
+        2, // padding between characters
         null,
     ) == 1);
     c.stbtt_PackSetOversampling(&self.packing_ctx, 2, 2);

@@ -95,7 +95,7 @@ const DemoState = struct {
     };
 };
 
-const use_child_size = UI.Size.fillByChildren(1, 1);
+const use_child_size = UI.Size.children2(1, 1);
 
 fn showDemo(
     _: std.mem.Allocator,
@@ -318,6 +318,18 @@ fn showDemo(
 }
 
 fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
+    const separator_args = .{
+        .bg_color = vec4{ 1, 1, 1, 1 },
+        .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.pixels(4, 1) },
+        .corner_radii = [4]f32{ 2, 2, 2, 2 },
+        .outer_padding = vec2{ 10, 5 },
+        .alignment = .center,
+    };
+    const section_title_style = .{
+        .font_type = .text_bold,
+        .alignment = .center,
+    };
+
     ui.label("Labels are for blocks of text with no interactivity.");
     ui.labelBox("You can use `labelBox` instead, if you want a background/borders");
     ui.labelBox(
@@ -325,16 +337,12 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
         \\then it will take up the necessary vertical space.
     );
 
-    ui.shape(.{
-        .bg_color = vec4{ 1, 1, 1, 1 },
-        .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.pixels(4, 1) },
-        .corner_radii = [4]f32{ 2, 2, 2, 2 },
-        .outer_padding = vec2{ 10, 5 },
-        .alignment = .center,
-    });
-
-    ui.label("Each node alignment can specify it's alignment relative to the parent:");
+    ui.shape(separator_args);
+    ui.pushTmpStyle(section_title_style);
+    ui.label("Node alignment");
     {
+        ui.label("Each node alignment can specify it's alignment relative to the parent:");
+
         const sides = ui.pushLayoutParent(.{ .no_id = true }, "", use_child_size, .x);
         defer ui.popParentAssert(sides);
 
@@ -356,6 +364,34 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
                 const alignment: UI.Alignment = @enumFromInt(alignment_field.value);
                 ui.pushTmpStyle(.{ .alignment = alignment });
                 ui.labelBoxF("UI.Alignment.{s}", .{alignment_field.name});
+            }
+        }
+    }
+
+    ui.shape(separator_args);
+    ui.pushTmpStyle(section_title_style);
+    ui.label("Text truncation");
+    {
+        const sides = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{
+            UI.Size.percent(1, 0), UI.Size.children(1),
+        }, .x);
+        defer ui.popParentAssert(sides);
+        for ([2]bool{ false, true }) |disable_truncation| {
+            const p = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{
+                UI.Size.percent(0.5, 0), UI.Size.children(1),
+            }, .y);
+            defer ui.popParentAssert(p);
+            ui.labelF("with `.flags.disable_text_truncation = {s}`", .{if (disable_truncation) "true" else "false"});
+            for ([_]f32{ 100, 200, 300, 400 }) |width| {
+                _ = ui.addNode(.{
+                    .draw_text = true,
+                    .draw_border = true,
+                    .no_id = true,
+                    .clip_children = true,
+                    .disable_text_truncation = disable_truncation,
+                }, "The quick brown fox jumps over the lazy dog.", .{
+                    .size = [2]UI.Size{ UI.Size.pixels(width, 1), UI.Size.text(1) },
+                });
             }
         }
     }

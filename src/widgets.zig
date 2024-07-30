@@ -815,6 +815,7 @@ pub fn textInputRaw(
     // (we can't just rely on the cursor for this information; imagine doing `End` + `LeftArrow`, for example)
     const text_node = ui.addNode(.{
         .draw_text = true,
+        .disable_text_truncation = true,
         .floating_x = true,
         .ignore_hash_sep = true,
     }, display_str, .{
