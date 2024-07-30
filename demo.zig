@@ -66,7 +66,7 @@ pub fn main() !void {
 }
 
 const DemoState = struct {
-    selected_tab: Tabs = .Basics,
+    selected_tab: Tabs = .@"Live Node Editor",
 
     clear_color: vec4 = vec4{ 0, 0, 0, 0.9 },
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
@@ -130,6 +130,7 @@ fn showDemo(
 
     switch (state.selected_tab) {
         .Basics => try showDemoTabBasics(ui, state),
+        .@"Live Node Editor" => try showDemoTabNodeEditor(ui, state),
         .@"Demo Config" => showDemoTabConfig(ui, state),
         else => ui.label("TODO"),
     }
@@ -525,6 +526,76 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
             }
         }
     }
+}
+
+var test_node: UI.Node = undefined;
+fn showDemoTabNodeEditor(ui: *UI, state: *DemoState) !void {
+    _ = state;
+    const node: *UI.Node = &test_node;
+    inline for (@typeInfo(UI.Node).Struct.fields) |field| {
+        if (field.type == ?*UI.Node) {} // TODO
+        if (field.type == UI.Flags) {
+            if (ui.toggleButton("flags", true).toggled) {
+                inline for (@typeInfo(UI.Flags).Struct.fields) |flag_field| {
+                    var flag = @field(node.flags, flag_field.name); // because it's packed
+                    _ = ui.checkBox(flag_field.name, &flag);
+                    @field(node.flags, flag_field.name) = flag;
+                }
+            }
+        } else if (comptime std.mem.endsWith(u8, field.name, "_color")) {
+            ui.startLine();
+            defer ui.endLine();
+
+            ui.label(field.name);
+
+            // TODO: a little square w/ the color that opens a full color picker when clicked
+            const color_preview = ui.addNode(.{
+                .toggleable = true,
+                .draw_border = true,
+                .draw_background = true,
+            }, field.name ++ "_color_display", .{
+                .bg_color = @field(node, field.name),
+                .border_color = vec4{ 0, 0, 0, 1 },
+                .cursor_type = .pointing_hand,
+                .size = UI.Size.exact(.em, 1.1, 1.1),
+            });
+            if (color_preview.signal.toggled) {
+                ui.startCtxMenu(null);
+                ui.colorPicker(field.name ++ "_color_picker", &@field(node, field.name));
+                ui.endCtxMenu();
+                // TODO: fix ctx menu not closing when clicking outside of it
+            } else if (color_preview.signal.hovering) {
+                ui.startTooltip(null);
+                const hex_rgba: @Vector(4, u8) = @intFromFloat(@round(@field(node, field.name)));
+                ui.labelF("#{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ hex_rgba[0], hex_rgba[1], hex_rgba[2], hex_rgba[3] });
+                ui.endTooltip();
+            }
+        } else if (@typeInfo(field.type) == .Enum) {
+            ui.startLine();
+            defer ui.endLine();
+
+            ui.label(field.name);
+
+            const toggle_sig = ui.toggleButton(@tagName(@field(node, field.name)), false);
+            if (toggle_sig.toggled) {
+                const placement = UI.RelativePlacement.absolute(.{ .top_left = toggle_sig.node.?.rect.get(.btm_left) });
+                ui.startCtxMenu(placement);
+                defer ui.endCtxMenu();
+                _ = ui.enumListBox(
+                    field.type,
+                    field.name ++ "_enum_list",
+                    UI.Size.exact(.pixels, 500, 200),
+                    &@field(node, field.name),
+                );
+            }
+        } else {
+            ui.labelF("{s} :: {any}", .{ field.name, @field(node, field.name) });
+        }
+    }
+
+    // TODO: try adding the node to the tree and report if any error happens or
+    // hash collision etc. to do this implement a way to get the saved UI errors
+    // mid-build instead of only at the end
 }
 
 fn showDemoTabConfig(ui: *UI, state: *DemoState) void {

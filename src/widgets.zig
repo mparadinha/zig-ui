@@ -286,8 +286,27 @@ pub fn endListBox(ui: *UI, opts: ScrollbarOptions) void {
     _ = ui.endScrollView(opts);
 }
 
-pub fn enumListBox() void {
-    @compileError("TODO");
+pub fn enumListBox(
+    ui: *UI,
+    comptime T: type,
+    name: []const u8,
+    size: [2]Size,
+    chosen_enum: *T,
+) void {
+    // TODO: scroll bar options
+    ui.startListBox(name, size);
+    defer ui.endListBox(.{
+        .bg_color = UI.colorFromRGB(0x1c, 0x23, 0x29),
+        .handle_color = vec4{ 0.85, 0.85, 0.85, 1 },
+    });
+
+    inline for (@typeInfo(T).Enum.fields) |field| {
+        const btn_sig = ui.button(field.name);
+        btn_sig.node.?.size[0] = Size.percent(1, 0);
+        if (btn_sig.pressed) chosen_enum.* = @enumFromInt(field.value);
+    }
+
+    // TODO: return correct click signals
 }
 
 pub fn stringsListBox(
