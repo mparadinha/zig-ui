@@ -6,6 +6,7 @@ const vec4 = zig_ui.vec4;
 const UI = @import("UI.zig");
 const Node = UI.Node;
 const Rect = UI.Rect;
+const FontType = UI.FontType;
 const Font = @import("Font.zig");
 const gfx = @import("graphics.zig");
 const indexOfNthScalar = UI.indexOfNthScalar;
@@ -150,12 +151,16 @@ pub fn render(self: *UI) !void {
 
     self.generic_shader.bind();
     self.generic_shader.set("screen_size", self.screen_size);
-    self.generic_shader.set("text_atlas", @as(i32, 0));
-    self.font.texture.bind(0);
-    self.generic_shader.set("text_bold_atlas", @as(i32, 1));
-    self.font_bold.texture.bind(1);
-    self.generic_shader.set("icon_atlas", @as(i32, 2));
-    self.icon_font.texture.bind(2);
+    inline for (@typeInfo(FontType).Enum.fields) |field| {
+        self.generic_shader.set(field.name ++ "_atlas", @as(i32, field.value));
+        const font = switch (@as(FontType, @enumFromInt(field.value))) {
+            .text => self.font,
+            .text_bold => self.font_bold,
+            .text_italic => self.font_italic,
+            .icon => self.icon_font,
+        };
+        font.texture.bind(field.value);
+    }
     gl.bindVertexArray(inputs_vao);
     gl.drawArrays(gl.POINTS, 0, @intCast(shader_inputs.items.len));
 }
@@ -234,6 +239,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
         const font = switch (node.font_type) {
             .text => &self.font,
             .text_bold => &self.font_bold,
+            .text_italic => &self.font_italic,
             .icon => &self.icon_font,
         };
 
@@ -315,6 +321,7 @@ fn largeInputOptimizationVisiblePartOfText(self: *UI, node: *Node) struct {
     const font: *Font = switch (node.font_type) {
         .text => &self.font,
         .text_bold => &self.font_bold,
+        .text_italic => &self.font_italic,
         .icon => &self.icon_font,
     };
     const line_size = font.getScaledMetrics(node.font_size).line_advance;

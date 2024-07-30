@@ -70,41 +70,12 @@ fn solveDownwardDependentWorkFn(_: *UI, node: *Node, axis: Axis) void {
     const axis_idx: usize = @intFromEnum(axis);
     const is_layout_axis = (axis == node.layout_axis);
 
-    const child_funcs = struct {
-        pub fn sumChildrenSizes(parent: *Node, idx: usize) f32 {
-            var sum: f32 = 0;
-            var child = parent.first;
-            while (child) |child_node| : (child = child_node.next) {
-                sum += child_node.calc_size[idx] + 2 * child_node.outer_padding[idx];
-            }
-            return sum;
-        }
-        pub fn maxChildrenSizes(parent: *Node, idx: usize) f32 {
-            var max_so_far: f32 = 0;
-            var child = parent.first;
-            while (child) |child_node| : (child = child_node.next) {
-                const child_size = switch (child_node.size[idx]) {
-                    .percent => blk: {
-                        if (@intFromEnum(child_node.layout_axis) == idx) {
-                            break :blk sumChildrenSizes(child_node, idx);
-                        } else {
-                            break :blk sumChildrenSizes(child_node, idx);
-                        }
-                    },
-                    else => child_node.calc_size[idx] + 2 * child_node.outer_padding[idx],
-                };
-                max_so_far = @max(max_so_far, child_size);
-            }
-            return max_so_far;
-        }
-    };
-
     switch (node.size[axis_idx]) {
         .children => {
             if (is_layout_axis) {
-                node.calc_size[axis_idx] = child_funcs.sumChildrenSizes(node, axis_idx);
+                node.calc_size[axis_idx] = sumChildSizes(node, axis);
             } else {
-                node.calc_size[axis_idx] = child_funcs.maxChildrenSizes(node, axis_idx);
+                node.calc_size[axis_idx] = maxChildSizes(node, axis);
             }
             node.calc_size[axis_idx] += 2 * node.inner_padding[axis_idx];
         },
@@ -229,6 +200,12 @@ fn solveFinalPosWorkFn(self: *UI, node: *Node, axis: Axis) void {
         node.clip_rect = node.rect;
     }
 
+    // calculate and store total child size
+    node.children_size[axis_idx] = if (is_layout_axis)
+        sumChildSizes(node, axis)
+    else
+        maxChildSizes(node, axis);
+
     if (node.child_count == 0) return;
 
     // start layout at the top left
@@ -314,4 +291,35 @@ fn layoutRecurseHelperPost(comptime work_fn: LayoutWorkFn, args: LayoutWorkFnArg
         layoutRecurseHelperPost(work_fn, .{ .self = args.self, .node = child_node, .axis = args.axis });
     }
     work_fn(args.self, args.node, args.axis);
+}
+
+fn sumChildSizes(parent: *Node, axis: Axis) f32 {
+    const axis_idx: usize = @intFromEnum(axis);
+    var sum: f32 = 0;
+    var child = parent.first;
+    while (child) |child_node| : (child = child_node.next) {
+        sum += child_node.calc_size[axis_idx] + 2 * child_node.outer_padding[axis_idx];
+    }
+    return sum;
+}
+
+fn maxChildSizes(parent: *Node, axis: Axis) f32 {
+    const axis_idx: usize = @intFromEnum(axis);
+    var max_so_far: f32 = 0;
+    var child = parent.first;
+    while (child) |child_node| : (child = child_node.next) {
+        const child_size = switch (child_node.size[axis_idx]) {
+            .percent => blk: {
+                // TODO: what? this can't be right...
+                if (child_node.layout_axis == axis) {
+                    break :blk sumChildSizes(child_node, axis);
+                } else {
+                    break :blk sumChildSizes(child_node, axis);
+                }
+            },
+            else => child_node.calc_size[axis_idx] + 2 * child_node.outer_padding[axis_idx],
+        };
+        max_so_far = @max(max_so_far, child_size);
+    }
+    return max_so_far;
 }

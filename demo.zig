@@ -380,7 +380,7 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
 
     const choices = [_][]const u8{ "Choice A", "Choice B", "Choice C", "Choice D", "Choice E", "Choice F" };
     ui.labelF("Current choice: {s}", .{choices[state.listbox_idx]});
-    _ = ui.listBox("listbox_test", .{ UI.Size.children(1), UI.Size.pixels(80, 1) }, &choices, &state.listbox_idx);
+    _ = ui.stringsListBox("listbox_test", UI.Size.exact(.pixels, 200, 100), &choices, &state.listbox_idx);
     ui.label("Drop down list:");
     _ = ui.dropDownList("dropdownlist_test", .{ UI.Size.children(1), UI.Size.pixels(80, 1) }, &choices, &state.listbox_idx);
 
@@ -425,11 +425,7 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
         defer ui.popParentAssert(p);
         ui.labelBoxF("A text input box (length of input: {:3>}):", .{state.text_input.bufpos});
         ui.pushTmpStyle(.{ .bg_color = vec4{ 0.75, 0.75, 0.75, 1 } });
-        _ = ui.lineInput(
-            "testing_text_input",
-            UI.Size.percent(1, 0),
-            &state.text_input,
-        );
+        _ = ui.lineInput("testing_text_input", &state.text_input, .{ .default_str = "<default string>" });
     }
 
     // tabbed content

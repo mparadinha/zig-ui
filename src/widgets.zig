@@ -13,6 +13,7 @@ const Signal = UI.Signal;
 const Rect = UI.Rect;
 const Size = UI.Size;
 const Axis = UI.Axis;
+const FontType = UI.FontType;
 const Placement = UI.Placement;
 const RelativePlacement = UI.RelativePlacement;
 const Icons = UI.Icons;
@@ -275,29 +276,45 @@ pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
     return signal;
 }
 
-pub fn listBox(
+pub fn startListBox(ui: *UI, name: []const u8, size: [2]Size) void {
+    ui.startScrollView(.{
+        .draw_background = true, // TODO: get this from a parameter
+    }, name, .{ .size = size });
+}
+
+pub fn endListBox(ui: *UI, opts: ScrollbarOptions) void {
+    _ = ui.endScrollView(opts);
+}
+
+pub fn enumListBox() void {
+    @compileError("TODO");
+}
+
+pub fn stringsListBox(
     ui: *UI,
-    hash: []const u8,
+    name: []const u8,
     size: [2]Size,
     choices: []const []const u8,
     chosen_idx: *usize,
 ) Signal {
-    const scroll_region = ui.pushLayoutParent(.{
-        .clip_children = true,
-        .scroll_children_y = true,
-    }, hash, size, .y);
-    defer ui.popParentAssert(scroll_region);
+    // TODO: scroll bar options
+    ui.startListBox(name, size);
+    defer ui.endListBox(.{
+        .bg_color = UI.colorFromRGB(0x1c, 0x23, 0x29),
+        .handle_color = vec4{ 0.85, 0.85, 0.85, 1 },
+    });
 
     for (choices, 0..) |str, idx| {
-        if (ui.button(str).pressed) chosen_idx.* = idx;
+        const btn_sig = ui.button(str);
+        btn_sig.node.?.size[0] = Size.percent(1, 0);
+        if (btn_sig.pressed) chosen_idx.* = idx;
     }
 
-    // TODO: scroll bar
-
     // TODO: return correct click signals
-    return scroll_region.signal;
+    return Signal{ .node = null };
 }
 
+// TODO: create the other helper variants for like we have for listBox
 pub fn dropDownList(
     ui: *UI,
     hash: []const u8,
@@ -325,7 +342,7 @@ pub fn dropDownList(
         };
         const list_window = ui.startWindow(hash, size, window_pos);
         defer ui.endWindow(list_window);
-        _ = ui.listBox(hash, size, choices, chosen_idx);
+        _ = ui.stringsListBox(hash, size, choices, chosen_idx);
     }
 
     // TODO: combine click+listbox signals
@@ -561,27 +578,22 @@ pub fn startScrollView(
     }, "scroll_content_p", .{
         .size = UI.Size.flexible(.percent, 1, 1),
     });
+    if (@hasField(InitArgs, "layout_axis")) scroll_content_p.layout_axis = init_args.layout_axis;
     ui.pushParent(scroll_content_p);
-
-    // this node serves only to store the total size of the children being
-    // scrolled, which we need for calculating the scroll bar sizes
-    const scroll_children_aggregate = ui.addNode(.{}, "scroll_children_aggregate", .{
-        .size = UI.Size.children2(1, 1),
-    });
-    if (@hasField(InitArgs, "layout_axis")) scroll_children_aggregate.layout_axis = init_args.layout_axis;
-    ui.pushParent(scroll_children_aggregate);
 }
 pub fn endScrollView(ui: *UI, opts: ScrollbarOptions) ScrollViewSignal {
-    const scroll_children_aggregate = ui.popParent(); // scroll_children_aggregate
     const scroll_content_p = ui.popParent();
+    const content_size = scroll_content_p.children_size;
+
+    // TODO: use `child_calc_size` together with `inner_padding` as well
 
     // horizontal scroll bar
-    ui.scrollbar("h_scroll_bar", .x, scroll_children_aggregate.rect.size()[0], scroll_content_p, opts);
+    ui.scrollbar("h_scroll_bar", .x, content_size[0], scroll_content_p, opts);
 
     _ = ui.popParent(); // hbar_p
 
     // vertical scroll bar
-    ui.scrollbar("v_scroll_bar", .y, scroll_children_aggregate.rect.size()[1], scroll_content_p, opts);
+    ui.scrollbar("v_scroll_bar", .y, content_size[1], scroll_content_p, opts);
 
     _ = ui.popParent(); // view_p
 
@@ -742,50 +754,62 @@ pub const TextInput = struct {
     }
 };
 
+pub const LineInputOptions = struct {
+    size: Size = Size.percent(1, 0),
+    /// shown when the input is empty and the users has not interacted with the text box yet
+    default_str: []const u8 = "",
+};
 pub fn lineInput(
     ui: *UI,
-    hash: []const u8,
-    x_size: UI.Size,
+    name: []const u8,
     input: *TextInput,
+    opts: LineInputOptions,
 ) Signal {
-    return textInputRaw(ui, hash, x_size, input) catch |e| blk: {
+    return textInputRaw(ui, name, input, .{
+        .size = [2]Size{ opts.size, Size.children(1) },
+        .default_str = opts.default_str,
+    }) catch |e| blk: {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
         break :blk std.mem.zeroes(Signal);
     };
 }
 
-// TODO: multi-line input support; will need an options struct param for
-// pressing enter behavior: input a newline or should that need shift-enter?)
+// TODO: multi-line input support:
+// [ ] need option for <ENTER> behavior: input newline or should that need shift-enter?
+pub const TextInputOptions = struct {
+    size: [2]Size = Size.flexible(.percent, 1, 1),
+    /// shown when the input is empty and the users has not interacted with the text box yet
+    default_str: []const u8 = "",
+};
 pub fn textInputRaw(
     ui: *UI,
-    hash: []const u8,
-    x_size: UI.Size,
+    name: []const u8,
     input: *TextInput,
+    opts: TextInputOptions,
 ) !Signal {
     const buffer = input.buffer;
     const buf_len = &input.bufpos;
 
-    const display_str = input.slice();
-
-    const widget_node = ui.addNodeStringsF(.{
+    const widget_node = ui.addNodeF(.{
         .clickable = true,
         .selectable = true,
         .clip_children = true,
         .draw_background = true,
         .draw_border = true,
-    }, "", .{}, "{s}", .{hash}, .{
+    }, "###{s}", .{name}, .{
         .layout_axis = .x,
         .cursor_type = .ibeam,
-        .size = [2]UI.Size{ x_size, UI.Size.children(1) },
+        .size = opts.size,
     });
-
     ui.pushParent(widget_node);
     defer ui.popParentAssert(widget_node);
-
     const sig = widget_node.signal;
 
     // make input box darker when not in focus
     if (!sig.focused) widget_node.bg_color = widget_node.bg_color * @as(vec4, @splat(0.85));
+
+    const show_default_str = (input.slice().len == 0 and !sig.focused);
+    const display_str = if (show_default_str) opts.default_str else input.slice();
 
     // we can't use a simple label because the position of text_node needs to be saved across frames
     // (we can't just rely on the cursor for this information; imagine doing `End` + `LeftArrow`, for example)
@@ -793,7 +817,13 @@ pub fn textInputRaw(
         .draw_text = true,
         .floating_x = true,
         .ignore_hash_sep = true,
-    }, display_str, .{});
+    }, display_str, .{
+        .font_type = if (show_default_str) FontType.text_italic else FontType.text,
+    });
+    // slightly darken text color when showing the default text
+    if (show_default_str) {
+        for (0..3) |i| text_node.text_color[i] *= 0.8;
+    }
 
     const font_pixel_size = ui.topStyle().font_size;
     const text_padd = ui.textPadding(text_node);
@@ -1167,6 +1197,11 @@ pub fn toggleButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, start_ope
     return ui.toggleButton(str, start_open);
 }
 
+pub fn startListBoxButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, layout_axis: Axis) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.startListBoxButton(str, layout_axis);
+}
+
 pub fn tabButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, selected: bool, opts: TabOptions) TabSignal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.tabButton(str, selected, opts);
@@ -1176,3 +1211,6 @@ pub fn pushLayoutParentF(ui: *UI, flags: UI.Flags, comptime fmt: []const u8, arg
     const str = ui.fmtTmpString(fmt, args);
     return ui.pushLayoutParent(flags, str, size, layout_axis);
 }
+
+// TODO: do a comptime check here that all public functions in this file that
+// take a `[]const u8` parameter have the corresponding format version of the function

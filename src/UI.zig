@@ -27,6 +27,7 @@ allocator: Allocator,
 generic_shader: gfx.Shader,
 font: Font,
 font_bold: Font,
+font_italic: Font,
 icon_font: Font,
 build_arena: std.heap.ArenaAllocator,
 node_table: NodeTable,
@@ -72,6 +73,7 @@ const NodeKey = NodeTable.Hash;
 pub const FontOptions = struct {
     font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Regular.ttf",
     bold_font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Bold.ttf",
+    italic_font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Oblique.ttf",
     icon_font_path: []const u8 = build_opts.resource_dir ++ "/icons.ttf",
 };
 // icon font (and this mapping) was generated using fontello.com
@@ -105,6 +107,7 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
         }) catch unreachable,
         .font = try Font.fromTTF(allocator, font_opts.font_path),
         .font_bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
+        .font_italic = try Font.fromTTF(allocator, font_opts.italic_font_path),
         .icon_font = try Font.fromTTF(allocator, font_opts.icon_font_path),
         .build_arena = std.heap.ArenaAllocator.init(allocator),
         .node_table = NodeTable.init(allocator),
@@ -144,6 +147,7 @@ pub fn deinit(self: *UI) void {
     self.build_arena.deinit();
     self.font.deinit();
     self.font_bold.deinit();
+    self.font_italic.deinit();
     self.icon_font.deinit();
     self.generic_shader.deinit();
     self.window_roots.deinit();
@@ -225,6 +229,7 @@ pub const Node = struct {
     // post-layout data
     rect: Rect,
     clip_rect: Rect,
+    children_size: vec2,
 
     // persists across frames (but gets updated every frame)
     signal: Signal,
@@ -251,7 +256,7 @@ pub const CustomDrawFn = *const fn (
 
 pub const Axis = enum { x, y };
 pub const Alignment = enum { start, center, end };
-pub const FontType = enum { text, text_bold, icon };
+pub const FontType = enum { text, text_bold, text_italic, icon }; // update `shader.frag` whenever this changes
 pub const TextAlign = enum { left, center, right };
 
 pub const Style = struct {
@@ -559,6 +564,7 @@ pub fn addNodeF(self: *UI, flags: Flags, comptime fmt: []const u8, args: anytype
     return self.addNode(flags, str, init_args);
 }
 
+// TODO: remove this, use '###' instead?
 pub fn addNodeStrings(self: *UI, flags: Flags, display_string: []const u8, hash_string: []const u8, init_args: anytype) *Node {
     const node = self.addNodeRawStrings(flags, display_string, hash_string, init_args) catch |e| blk: {
         self.setErrorInfo(@errorReturnTrace(), @errorName(e));
@@ -1043,6 +1049,7 @@ fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
     const font: *Font = switch (node.font_type) {
         .text => &self.font,
         .text_bold => &self.font_bold,
+        .text_italic => &self.font_italic,
         .icon => &self.icon_font,
     };
 
