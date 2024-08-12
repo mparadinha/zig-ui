@@ -603,6 +603,9 @@ pub fn addNodeRawStrings(
     hash_str_in: []const u8,
     init_args: anytype,
 ) !*Node {
+    @import("root").prof.startZoneN("UI.addNodeRawStrings");
+    defer @import("root").prof.stopZoneN("UI.addNodeRawStrings");
+
     const arena = self.build_arena.allocator();
 
     const display_str = if (flags.draw_text) display_str_in else &[0]u8{};
@@ -1055,6 +1058,9 @@ pub fn textPosFromNode(self: *UI, node: *Node) vec2 {
 }
 
 fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
+    @import("root").prof.startZoneN("UI.calcTextRect");
+    defer @import("root").prof.stopZoneN("UI.calcTextRect");
+
     const font: *Font = switch (node.font_type) {
         .text => &self.font,
         .text_bold => &self.font_bold,
@@ -1195,6 +1201,9 @@ pub fn indexOfNthScalar(slice: []const u8, scalar: u8, nth: usize) ?usize {
 }
 
 pub fn fmtTmpString(ui: *UI, comptime fmt: []const u8, args: anytype) []const u8 {
+    @import("root").prof.startZoneN("UI.fmtTmpString");
+    defer @import("root").prof.stopZoneN("UI.fmtTmpString");
+
     return std.fmt.allocPrint(ui.build_arena.allocator(), fmt, args) catch |e| {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
         return "";
@@ -1349,6 +1358,8 @@ pub const NodeTable = struct {
     }
 
     pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GetOrPutResult {
+        @import("root").prof.startZoneN("NodeTable.getOrPutHash");
+        defer @import("root").prof.stopZoneN("NodeTable.getOrPutHash");
         const gop = try self.ptr_map.getOrPut(hash);
         if (!gop.found_existing) {
             const value_ptr = try self.allocator.create(V);
@@ -1361,6 +1372,8 @@ pub const NodeTable = struct {
     }
 
     pub fn getKeyHash(_: NodeTable, key: K) Hash {
+        @import("root").prof.startZoneN("NodeTable.getKeyHash");
+        defer @import("root").prof.stopZoneN("NodeTable.getKeyHash");
         return std.hash_map.hashString(key);
     }
 

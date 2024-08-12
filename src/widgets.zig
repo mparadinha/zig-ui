@@ -174,7 +174,7 @@ pub fn slider(
     max: T,
 ) void {
     // TODO: also allow integer types for values
-    if (T != f32 and T != f64) @panic("TODO: add support for non-float types for `slider`");
+    // if (T != f32 and T != f64) @panic("TODO: add support for non-float types for `slider`");
     // TODO: generalizing this to y-axis slider so it can be used for scroll bars and stuff like volume sliders
     // TODO: maybe add a more generic slider functions like `sliderOptions` or `sliderExtra` or `sliderOpts` or `sliderEx`
     //       or just add an `options: SliderOptions` argument, following the convention of zig stdlib
@@ -190,7 +190,11 @@ pub fn slider(
 
     const scroll_size = scroll_zone.rect.size();
 
-    const handle_percent = (value_ptr.* - min) / (max - min);
+    const handle_percent: f32 = switch (@typeInfo(T)) {
+        .Float => @as(f32, @floatCast(value_ptr.* - min)) / @as(f32, @floatCast(max - min)),
+        .Int => @as(f32, @floatFromInt(value_ptr.* - min)) / @as(f32, @floatFromInt(max - min)),
+        else => @panic("TODO: add support for '" ++ @typeName(T) ++ "' sliders"),
+    };
     const handle_radius = 0.3 * scroll_size[1];
     var handle_pos = handle_percent * scroll_size[0];
     // I'm not using `std.math.clamp` here on purpose, because of the 0 size on the 1st frame
@@ -232,7 +236,11 @@ pub fn slider(
         const scroll_zone_size = scroll_zone.rect.size()[0] - 2 * handle_radius;
         const scroll_zone_pos = scroll_zone.signal.mouse_pos[0] - handle_radius;
         const percentage = clamp(scroll_zone_pos / scroll_zone_size, 0, 1);
-        value_ptr.* = min + (max - min) * percentage;
+        value_ptr.* = switch (@typeInfo(T)) {
+            .Float => min + (max - min) * @as(T, @floatCast(percentage)),
+            .Int => min + @as(T, @intFromFloat(@round(@as(f32, @floatFromInt(max - min)) * percentage))),
+            else => @panic("TODO: add support for '" ++ @typeName(T) ++ "' sliders"),
+        };
     }
 
     value_ptr.* = clamp(value_ptr.*, min, max);

@@ -8,6 +8,8 @@ const Node = UI.Node;
 const Axis = UI.Axis;
 
 pub fn layoutTree(self: *UI, root: *Node) void {
+    @import("root").prof.startZoneN("UI.layoutTree");
+    defer @import("root").prof.stopZoneN("UI.layoutTree");
     solveIndependentSizes(self, root);
     solveDownwardDependent(self, root);
     solveUpwardDependent(self, root);

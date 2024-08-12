@@ -38,12 +38,16 @@ pub fn main() !void {
         .current_tabs = std.ArrayList(usize).init(allocator),
     };
     defer demo.current_tabs.deinit();
-    var show_profiler_graph = false;
+    var show_profiler_graph = true;
 
     var last_time: f32 = @floatCast(glfw.getTime());
     while (!window.shouldClose()) {
+        prof.markFrame();
+
         prof.startZoneN("main loop");
         defer prof.stopZoneN("main loop");
+
+        glfw.swapInterval(if (demo.unlock_framerate) 0 else 1);
 
         // grab all window/input information we need for this frame
         const cur_time: f32 = @floatCast(glfw.getTime());
@@ -52,19 +56,17 @@ pub fn main() !void {
         const mouse_pos = window.getMousePos();
         const fbsize = window.getFramebufferSize();
 
-        glfw.swapInterval(if (demo.unlock_framerate) 0 else 1);
-
         try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
         if (show_profiler_graph) showProfilerInfo(&ui);
         ui.endBuild(dt);
 
-        if (window.event_queue.searchAndRemove(.KeyUp, .{
+        if (window.event_queue.searchAndRemove(.KeyDown, .{
             .mods = .{ .control = true, .shift = true },
             .key = .d,
         })) dbg_ui_view.active = !dbg_ui_view.active;
 
-        if (window.event_queue.searchAndRemove(.KeyUp, .{
+        if (window.event_queue.searchAndRemove(.KeyDown, .{
             .mods = .{ .control = true, .shift = true },
             .key = .p,
         })) show_profiler_graph = !show_profiler_graph;
@@ -81,7 +83,8 @@ pub fn main() !void {
 }
 
 const DemoState = struct {
-    selected_tab: Tabs = .Basics,
+    // selected_tab: Tabs = .Basics,
+    selected_tab: Tabs = .@"Perf. testing",
 
     clear_color: vec4 = vec4{ 0, 0, 0, 0.9 },
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
@@ -98,6 +101,9 @@ const DemoState = struct {
     zoom_display: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
     zoom_region: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
 
+    // perf. testing stuff
+    dummy_labels: usize = 350,
+
     show_debug_stats: bool = true,
     show_zoom: bool = false,
     unlock_framerate: bool = false,
@@ -107,6 +113,7 @@ const DemoState = struct {
         Styling,
         @"Live Node Editor",
         @"Custom Texture",
+        @"Perf. testing",
         @"Demo Config",
     };
 };
@@ -150,6 +157,7 @@ fn showDemo(
     switch (state.selected_tab) {
         .Basics => try showDemoTabBasics(ui, state),
         .@"Demo Config" => showDemoTabConfig(ui, state),
+        .@"Perf. testing" => showDemoTabPerfTesting(ui, state),
         else => ui.label("TODO"),
     }
 
@@ -553,6 +561,17 @@ fn showDemoTabConfig(ui: *UI, state: *DemoState) void {
     _ = ui.checkBox("Unlock framerate", &state.unlock_framerate);
 }
 
+fn showDemoTabPerfTesting(ui: *UI, state: *DemoState) void {
+    {
+        ui.startLine();
+        defer ui.endLine();
+        ui.labelF("{: >4}", .{state.dummy_labels});
+        const slider_size = [2]UI.Size{ UI.Size.em(50, 1), UI.Size.em(1, 1) };
+        ui.slider(usize, "dummy_label_slider", slider_size, &state.dummy_labels, 0, 5000);
+    }
+    for (0..state.dummy_labels) |idx| ui.labelF("label #{}", .{idx});
+}
+
 fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void {
     const save_screenshot = false;
 
@@ -637,11 +656,49 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
 
 pub const Profiler = struct {
     zone_buckets: [20]Bucket = [_]Bucket{.{}} ** 20,
+    frame_times: [Zone.number_of_samples]f32 = [_]f32{0} ** Zone.number_of_samples,
+    frame_start: i128 = 0,
+    frame_idx: usize = 0,
 
     const Bucket = std.BoundedArray(Entry, 5);
     const Entry = struct { key: []const u8, hash: u64, zone: Zone };
 
-    pub fn gopZoneN(self: *Profiler, comptime name: []const u8) struct {
+    pub const ZoneIter = struct {
+        buckets: []Bucket,
+        bucket_idx: usize = 0,
+        entry_idx: usize = 0,
+        pub fn next(self: *ZoneIter) ?*Zone {
+            if (self.bucket_idx >= self.buckets.len) return null;
+            while (self.entry_idx >= self.buckets[self.bucket_idx].len) {
+                self.entry_idx = 0;
+                self.bucket_idx += 1;
+                if (self.bucket_idx >= self.buckets.len) return null;
+            }
+
+            const zone_ptr = &(self.buckets[self.bucket_idx].slice()[self.entry_idx].zone);
+            self.entry_idx += 1;
+            return zone_ptr;
+        }
+    };
+    pub fn zoneIter(self: *Profiler) ZoneIter {
+        return .{ .buckets = &self.zone_buckets };
+    }
+
+    pub fn markFrame(self: *Profiler) void {
+        var zone_iter = self.zoneIter();
+        while (zone_iter.next()) |zone| zone.commit();
+
+        const new_frame_start = std.time.nanoTimestamp();
+        const elapsed_ns: f32 = @floatFromInt(new_frame_start - self.frame_start);
+        self.frame_start = new_frame_start;
+
+        self.frame_times[self.frame_idx] = elapsed_ns / std.time.ns_per_s;
+        self.frame_idx += 1;
+        self.frame_idx %= self.frame_times.len;
+    }
+
+    fn gopZoneN(self: *Profiler, comptime name: []const u8) struct {
+        hash: u64,
         value_ptr: *Zone,
         found_existing: bool,
     } {
@@ -649,41 +706,62 @@ pub const Profiler = struct {
         const bucket_idx = hash % self.zone_buckets.len;
         const bucket = &self.zone_buckets[bucket_idx];
         for (bucket.slice()) |*entry| {
-            if (entry.hash == hash) return .{ .value_ptr = &entry.zone, .found_existing = true };
+            if (entry.hash == hash) return .{ .hash = hash, .value_ptr = &entry.zone, .found_existing = true };
         }
         bucket.append(.{ .key = name, .hash = hash, .zone = undefined }) catch @panic("OOM");
-        return .{ .value_ptr = &bucket.buffer[bucket.len - 1].zone, .found_existing = false };
+        return .{ .hash = hash, .value_ptr = &bucket.buffer[bucket.len - 1].zone, .found_existing = false };
     }
 
     pub fn startZoneN(self: *Profiler, comptime name: []const u8) void {
         const gop = self.gopZoneN(name);
         const zone = gop.value_ptr;
-        if (!gop.found_existing) zone.* = .{ .samples = undefined };
-        if (zone.start_timestamp != null) return;
-        zone.start_timestamp = std.time.nanoTimestamp();
+        if (!gop.found_existing) {
+            const hash = std.mem.asBytes(&gop.hash);
+            const color = UI.colorFromRGB(hash[0], hash[1], hash[2]);
+            zone.* = .{ .color = color };
+        }
+        zone.start();
     }
 
     pub fn stopZoneN(self: *Profiler, comptime name: []const u8) void {
         const zone = self.gopZoneN(name).value_ptr;
-        const timestamp = std.time.nanoTimestamp();
-        const elapsed_ns: f32 = @floatFromInt(timestamp - zone.start_timestamp.?);
-        zone.start_timestamp = null;
-        zone.sample(elapsed_ns / std.time.ns_per_s);
+        zone.stop();
     }
 };
+
 pub const Zone = struct {
-    samples: [1000]f32,
+    samples: [number_of_samples]f32 = [_]f32{0} ** number_of_samples,
+    sample_counter: [number_of_samples]u32 = [_]u32{0} ** number_of_samples,
     idx: usize = 0,
-    color: ?vec4 = null,
-    /// Non `null` when we are timing inside this zone
+
     start_timestamp: ?i128 = null,
+    acc_sample: i128 = 0,
+    acc_counter: u32 = 0,
+
+    color: vec4,
     display: bool = true,
 
-    /// Add new sample to ring buffer
-    pub fn sample(self: *Zone, value: f32) void {
-        self.samples[self.idx] = value;
+    const number_of_samples = 1000;
+
+    pub fn start(self: *Zone) void {
+        self.start_timestamp = std.time.nanoTimestamp();
+    }
+
+    pub fn stop(self: *Zone) void {
+        const timestamp = std.time.nanoTimestamp();
+        const elapsed_ns = timestamp - self.start_timestamp.?;
+        self.start_timestamp = null;
+        self.acc_sample += elapsed_ns;
+        self.acc_counter += 1;
+    }
+
+    pub fn commit(self: *Zone) void {
+        self.samples[self.idx] = @as(f32, @floatFromInt(self.acc_sample)) / std.time.ns_per_s;
+        self.sample_counter[self.idx] = self.acc_counter;
+        self.acc_sample = 0;
+        self.acc_counter = 0;
         self.idx += 1;
-        self.idx %= self.samples.len;
+        self.idx %= number_of_samples;
     }
 };
 
@@ -698,38 +776,125 @@ fn showProfilerInfo(ui: *UI) void {
         ui.topParent().last.?.flags.floating_y = true;
         ui.topParent().last.?.rel_pos = UI.RelativePlacement.match(.center);
     }
-    for (&prof.zone_buckets) |*bucket| {
-        for (bucket.slice()) |*entry| {
-            const name = entry.key;
-            const zone = &entry.zone;
-            ui.startLine();
-            defer ui.endLine();
-            const color = blk: {
-                const hash = std.mem.asBytes(&entry.hash);
-                break :blk UI.colorFromRGB(hash[0], hash[1], hash[2]);
-            };
+    const columns: []const struct {
+        name: []const u8,
+        size: f32, // in `em`
+    } = &.{
+        .{ .name = "zone", .size = 15 },
+        .{ .name = "% of frame", .size = 5 },
+        .{ .name = "ms/frame", .size = 5 },
+        .{ .name = "calls/frame", .size = 6 },
+        .{ .name = "ms/call", .size = 5 },
+    };
+    // table header
+    {
+        ui.startLine();
+        defer ui.endLine();
+        const label_flags = UI.Flags{ .draw_text = true, .draw_border = true, .no_id = true };
+        for (columns) |col| {
+            const size = [2]UI.Size{ UI.Size.em(col.size, 1), UI.Size.text(1) };
+            _ = ui.addNode(label_flags, col.name, .{ .size = size });
+        }
+    }
+    var zone_entries = blk: {
+        const ZoneEntry = struct { key: []const u8, zone: *Zone };
+        var array = std.BoundedArray(ZoneEntry, 20 * 5){};
+        for (&prof.zone_buckets) |*bucket| {
+            for (bucket.slice()) |*entry| {
+                array.append(.{ .key = entry.key, .zone = &entry.zone }) catch unreachable;
+            }
+        }
+        // TODO: support sorting by other attributes (and reverse-sorting)
+        std.sort.insertion(ZoneEntry, array.slice(), {}, (struct {
+            pub fn func(_: void, lhs: ZoneEntry, rhs: ZoneEntry) bool {
+                const V = @Vector(Zone.number_of_samples, f32);
+                return @reduce(.Add, @as(V, lhs.zone.samples)) >= @reduce(.Add, @as(V, rhs.zone.samples));
+            }
+        }).func);
+
+        break :blk array;
+    };
+    for (zone_entries.slice()) |entry| {
+        const name = entry.key;
+        const zone = entry.zone;
+        const V_f32 = @Vector(Zone.number_of_samples, f32);
+        const V_u32 = @Vector(Zone.number_of_samples, u32);
+        const zone_total_time = @reduce(.Add, @as(V_f32, zone.samples));
+        const zone_total_calls = @reduce(.Add, @as(V_u32, zone.sample_counter));
+        const zone_total_pct_of_frame = @reduce(.Add, @as(V_f32, zone.samples) / @as(V_f32, prof.frame_times));
+        const n_samples: f32 = @floatFromInt(zone.samples.len);
+        const avg_ms_per_frame = (zone_total_time / @as(f32, n_samples)) * 1000;
+        const avg_calls_per_frame = @as(f32, @floatFromInt(zone_total_calls)) / n_samples;
+        const avg_ms_per_call = avg_ms_per_frame / avg_calls_per_frame;
+        const avg_pct_of_frame = zone_total_pct_of_frame / n_samples;
+
+        ui.startLine();
+        defer ui.endLine();
+        const col_flags = UI.Flags{ .draw_border = true, .no_id = true };
+        const col_args = (struct {
+            pub fn func(idx: *usize, cols: @TypeOf(columns)) struct { size: [2]UI.Size, layout_axis: UI.Axis } {
+                const col = cols[idx.*];
+                const size = [2]UI.Size{ UI.Size.em(col.size, 1), UI.Size.children(1) };
+                idx.* += 1;
+                return .{ .size = size, .layout_axis = .x };
+            }
+        }).func;
+        var col_idx: usize = 0;
+        // 'zone' column
+        {
+            ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
+            defer _ = ui.popParent();
+
+            // TODO: turn this into a button that opens a color picker
             _ = ui.addNode(.{
                 .draw_background = true,
                 .no_id = true,
                 .floating_y = true,
             }, "", .{
-                .bg_color = color,
                 .size = UI.Size.exact(.em, 1, 1),
+                .bg_color = zone.color,
                 .rel_pos = UI.RelativePlacement.match(.center),
             });
-            const zone_total_time = blk: {
-                var sum: f32 = 0;
-                for (zone.samples) |sample| sum += sample;
-                break :blk sum;
-            };
-            const total_time = (@as(f32, @floatFromInt(zone.samples.len)) * fps_value);
-            const avg_elapsed = zone_total_time / @as(f32, @floatFromInt(zone.samples.len));
-            _ = ui.checkBoxF("###{s}", .{name}, &zone.display);
-            ui.labelF("{s} (avg. {d:2.1}%, {d:3.2}ms)", .{
-                name,
-                100 * (zone_total_time / total_time),
-                avg_elapsed * 1000,
-            });
+            ui.spacer(.x, UI.Size.em(0.1, 1));
+            if (ui.addNodeF(.{
+                .clickable = true,
+                .draw_background = zone.display,
+                .draw_border = true,
+                .draw_hot_effects = true,
+                .draw_text = true,
+                .floating_y = true,
+            }, "{s}###{s}_zone_toggle", .{ if (zone.display) UI.Icons.ok else " ", name }, .{
+                .cursor_type = .pointing_hand,
+                .font_type = .icon,
+                .font_size = ui.topStyle().font_size * 0.75,
+                .rel_pos = UI.RelativePlacement.match(.center),
+            }).signal.clicked) zone.display = !zone.display;
+            ui.spacer(.x, UI.Size.em(0.1, 1));
+            ui.label(name);
+        }
+        // '% of frame' column
+        {
+            ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
+            defer _ = ui.popParent();
+            ui.labelF("{d:2.1}", .{100 * (avg_pct_of_frame)});
+        }
+        // 'ms/frame' column
+        {
+            ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
+            defer _ = ui.popParent();
+            ui.labelF("{d:3.2}", .{avg_ms_per_frame});
+        }
+        // 'calls/frame' column
+        {
+            ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
+            defer _ = ui.popParent();
+            ui.labelF("{d:2.1}", .{avg_calls_per_frame});
+        }
+        // 'ms/call' column
+        {
+            ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
+            defer _ = ui.popParent();
+            ui.labelF("{d:3.4}", .{avg_ms_per_call});
         }
     }
 }
