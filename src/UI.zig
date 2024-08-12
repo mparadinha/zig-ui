@@ -793,16 +793,6 @@ pub fn startBuild(
     // frame, while maintaining *some* inter-frame consistency
     self.prng.state = 0;
 
-    // remove the `no_id` nodes from the hash table before starting this new frame
-    // TODO: is this necessary or just a memory saving thing? because if it's the
-    //       latter, these nodes should get yetted on the next frame anyway...
-    prof.startZoneN("UI.startBuild: prune `no_id`");
-    var node_iter = self.node_table.valueIterator();
-    while (node_iter.next()) |node| {
-        if (node.flags.no_id) try node_iter.removeCurrent();
-    }
-    prof.stopZoneN("UI.startBuild: prune `no_id`");
-
     const screen_size = vec2{ @as(f32, @floatFromInt(screen_w)), @as(f32, @floatFromInt(screen_h)) };
     self.screen_size = screen_size;
     self.mouse_pos = mouse_pos;
