@@ -10,6 +10,10 @@ const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
 const UI = zig_ui.UI;
 
+pub var prof = Profiler{};
+const fps_value: f32 = 1.0 / 60.0;
+var max_graph_y: f32 = fps_value * 1.5;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(!gpa.detectLeaks());
@@ -34,9 +38,13 @@ pub fn main() !void {
         .current_tabs = std.ArrayList(usize).init(allocator),
     };
     defer demo.current_tabs.deinit();
+    var show_profiler_graph = false;
 
     var last_time: f32 = @floatCast(glfw.getTime());
     while (!window.shouldClose()) {
+        prof.startZoneN("main loop");
+        defer prof.stopZoneN("main loop");
+
         // grab all window/input information we need for this frame
         const cur_time: f32 = @floatCast(glfw.getTime());
         const dt = cur_time - last_time;
@@ -44,8 +52,11 @@ pub fn main() !void {
         const mouse_pos = window.getMousePos();
         const fbsize = window.getFramebufferSize();
 
+        glfw.swapInterval(if (demo.unlock_framerate) 0 else 1);
+
         try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
+        if (show_profiler_graph) showProfilerInfo(&ui);
         ui.endBuild(dt);
 
         if (window.event_queue.searchAndRemove(.KeyUp, .{
@@ -53,13 +64,17 @@ pub fn main() !void {
             .key = .d,
         })) dbg_ui_view.active = !dbg_ui_view.active;
 
+        if (window.event_queue.searchAndRemove(.KeyUp, .{
+            .mods = .{ .control = true, .shift = true },
+            .key = .p,
+        })) show_profiler_graph = !show_profiler_graph;
+
         window.clear(demo.clear_color);
-        // do whatever other rendering you want below the UI here
+        // <do whatever other rendering you want below the UI here>
         try ui.render();
-        if (dbg_ui_view.active) {
-            try dbg_ui_view.show(&ui, fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window, dt);
-        }
+        if (dbg_ui_view.active) try dbg_ui_view.show(&ui, fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window, dt);
         if (demo.show_zoom) try renderZoomDisplay(allocator, demo, fbsize);
+        if (show_profiler_graph) try renderProfilerGraph(allocator, demo, prof, fbsize);
 
         window.update();
     }
@@ -85,6 +100,7 @@ const DemoState = struct {
 
     show_debug_stats: bool = true,
     show_zoom: bool = false,
+    unlock_framerate: bool = false,
 
     const Tabs = enum {
         Basics,
@@ -105,6 +121,9 @@ fn showDemo(
     dt: f32,
     state: *DemoState,
 ) !void {
+    prof.startZoneN("showDemo");
+    defer prof.stopZoneN("showDemo");
+
     const demo_p = ui.addNode(.{
         .draw_background = true,
     }, "demo_window", .{
@@ -531,6 +550,7 @@ fn showDemoTabConfig(ui: *UI, state: *DemoState) void {
     _ = ui.checkBox("Toggle debug stats in the corner", &state.show_debug_stats);
     _ = ui.checkBox("Hot-reload UI shaders", &UI.hot_reload_shaders);
     _ = ui.checkBox("Show zoom display", &state.show_zoom);
+    _ = ui.checkBox("Unlock framerate", &state.unlock_framerate);
 }
 
 fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void {
@@ -614,3 +634,268 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
         std.debug.print("saved screenshot to 'screenshot.ppm'\n", .{});
     }
 }
+
+pub const Profiler = struct {
+    zone_buckets: [20]Bucket = [_]Bucket{.{}} ** 20,
+
+    const Bucket = std.BoundedArray(Entry, 5);
+    const Entry = struct { key: []const u8, hash: u64, zone: Zone };
+
+    pub fn gopZoneN(self: *Profiler, comptime name: []const u8) struct {
+        value_ptr: *Zone,
+        found_existing: bool,
+    } {
+        const hash = comptime std.hash.Wyhash.hash(0, name);
+        const bucket_idx = hash % self.zone_buckets.len;
+        const bucket = &self.zone_buckets[bucket_idx];
+        for (bucket.slice()) |*entry| {
+            if (entry.hash == hash) return .{ .value_ptr = &entry.zone, .found_existing = true };
+        }
+        bucket.append(.{ .key = name, .hash = hash, .zone = undefined }) catch @panic("OOM");
+        return .{ .value_ptr = &bucket.buffer[bucket.len - 1].zone, .found_existing = false };
+    }
+
+    pub fn startZoneN(self: *Profiler, comptime name: []const u8) void {
+        const gop = self.gopZoneN(name);
+        const zone = gop.value_ptr;
+        if (!gop.found_existing) zone.* = .{ .samples = undefined };
+        if (zone.start_timestamp != null) return;
+        zone.start_timestamp = std.time.nanoTimestamp();
+    }
+
+    pub fn stopZoneN(self: *Profiler, comptime name: []const u8) void {
+        const zone = self.gopZoneN(name).value_ptr;
+        const timestamp = std.time.nanoTimestamp();
+        const elapsed_ns: f32 = @floatFromInt(timestamp - zone.start_timestamp.?);
+        zone.start_timestamp = null;
+        zone.sample(elapsed_ns / std.time.ns_per_s);
+    }
+};
+pub const Zone = struct {
+    samples: [1000]f32,
+    idx: usize = 0,
+    color: ?vec4 = null,
+    /// Non `null` when we are timing inside this zone
+    start_timestamp: ?i128 = null,
+    display: bool = true,
+
+    /// Add new sample to ring buffer
+    pub fn sample(self: *Zone, value: f32) void {
+        self.samples[self.idx] = value;
+        self.idx += 1;
+        self.idx %= self.samples.len;
+    }
+};
+
+fn showProfilerInfo(ui: *UI) void {
+    const w = ui.startWindow("profiler_window", UI.Size.exact(.percent, 1, 1), UI.RelativePlacement.simple(vec2{ 0, 0 }));
+    defer ui.endWindow(w);
+    {
+        ui.startLine();
+        defer ui.endLine();
+        ui.labelF("max_graph_y: {d: >4.1}", .{max_graph_y * 1000});
+        ui.slider(f32, "max_graph_y", UI.Size.exact(.em, 50, 1), &max_graph_y, 0, 0.1);
+        ui.topParent().last.?.flags.floating_y = true;
+        ui.topParent().last.?.rel_pos = UI.RelativePlacement.match(.center);
+    }
+    for (&prof.zone_buckets) |*bucket| {
+        for (bucket.slice()) |*entry| {
+            const name = entry.key;
+            const zone = &entry.zone;
+            ui.startLine();
+            defer ui.endLine();
+            const color = blk: {
+                const hash = std.mem.asBytes(&entry.hash);
+                break :blk UI.colorFromRGB(hash[0], hash[1], hash[2]);
+            };
+            _ = ui.addNode(.{
+                .draw_background = true,
+                .no_id = true,
+                .floating_y = true,
+            }, "", .{
+                .bg_color = color,
+                .size = UI.Size.exact(.em, 1, 1),
+                .rel_pos = UI.RelativePlacement.match(.center),
+            });
+            const zone_total_time = blk: {
+                var sum: f32 = 0;
+                for (zone.samples) |sample| sum += sample;
+                break :blk sum;
+            };
+            const total_time = (@as(f32, @floatFromInt(zone.samples.len)) * fps_value);
+            const avg_elapsed = zone_total_time / @as(f32, @floatFromInt(zone.samples.len));
+            _ = ui.checkBoxF("###{s}", .{name}, &zone.display);
+            ui.labelF("{s} (avg. {d:2.1}%, {d:3.2}ms)", .{
+                name,
+                100 * (zone_total_time / total_time),
+                avg_elapsed * 1000,
+            });
+        }
+    }
+}
+
+fn renderProfilerGraph(allocator: Allocator, demo: DemoState, profiler: Profiler, fbsize: uvec2) !void {
+    prof.startZoneN("renderProfilerGraph");
+    defer prof.stopZoneN("renderProfilerGraph");
+    // TODO: change UI render backend to operate on primitives (lines, dots, triangles, rects)
+    // instead of only supporting our special rects
+
+    // TODO: don't recreate this every time, save it as part of profiler maybe?
+    const shader = try gfx.Shader.from_srcs(allocator, "profiler_graph", .{
+        .vertex =
+        \\#version 330 core
+        \\in float sample;
+        \\uniform uint sample_count;
+        \\uniform float max_y;
+        \\void main() {
+        \\    vec2 graph_pos = vec2(gl_VertexID / float(max(1, sample_count) - 1), sample / max_y);
+        \\    vec2 pos = graph_pos * 2 - vec2(1);
+        \\    gl_Position = vec4(pos, 0, 1);
+        \\}
+        ,
+        .fragment =
+        \\#version 330 core
+        \\uniform vec4 color;
+        \\out vec4 FragColor;
+        \\void main() { FragColor = color; }
+        ,
+    });
+    defer shader.deinit();
+
+    _ = fbsize;
+    _ = demo;
+    shader.bind();
+    // shader.set("screen_size", @as(vec2, @floatFromInt(fbsize)));
+    shader.set("max_y", max_graph_y);
+    for (profiler.zone_buckets) |bucket| {
+        for (bucket.slice()) |entry| {
+            const name_hash = entry.hash;
+            const zone = entry.zone;
+            if (!zone.display) continue;
+            const color = blk: {
+                const hash = std.mem.asBytes(&name_hash);
+                break :blk UI.colorFromRGB(hash[0], hash[1], hash[2]);
+            };
+            // TODO: don't create these buffers every time. create/alloc once then just update data
+            const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, zone.samples.len);
+            defer vert_buf.deinit();
+            vert_buf.update(sliceAsBytes(f32, &zone.samples));
+            shader.set("sample_count", @as(u32, @intCast(zone.samples.len)));
+            shader.set("color", color);
+            vert_buf.draw(gl.LINE_STRIP);
+        }
+    }
+
+    { // draw 60fps line
+        const samples = &[_]f32{ fps_value, fps_value };
+
+        const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, samples.len);
+        defer vert_buf.deinit();
+        vert_buf.update(sliceAsBytes(f32, samples));
+        shader.set("sample_count", @as(u32, @intCast(samples.len)));
+        shader.set("color", vec4{ 0, 0.9, 0, 1 });
+        vert_buf.draw(gl.LINE_STRIP);
+    }
+}
+
+fn sliceAsBytes(comptime T: type, slice: []const T) []const u8 {
+    var bytes: []const u8 = undefined;
+    bytes.ptr = @ptrCast(slice.ptr);
+    bytes.len = slice.len * @sizeOf(T);
+    return bytes;
+}
+
+/// Generic GPU geometry buffer.
+pub const VertexBuffer = struct {
+    vao: u32,
+    vbo: u32,
+    // TODO: support index/element buffer
+    elem_size: usize,
+    n_elems: usize,
+    // TODO: support keeping around a copy of the GPU data inside this data structure
+    // instead of outside of it; may be helpfull in some cases.
+
+    pub const Attrib = struct {
+        /// gl.FLOAT, etc.
+        type: gl.GLenum,
+        /// e.g. len=2 for vec2
+        len: usize,
+
+        pub fn size(self: Attrib) usize {
+            return sizeOfGLType(self.type) * self.len;
+        }
+    };
+
+    /// Initialize and allocate GPU side buffer
+    pub fn init(
+        attribs: []const Attrib,
+        n_elems: usize,
+        // TODO: support multiple vbos?
+    ) VertexBuffer {
+        const elem_size = blk: {
+            var sum: usize = 0;
+            // TODO: don't assume element attribs are tighly packed?
+            for (attribs) |attrib| sum += attrib.size();
+            break :blk sum;
+        };
+
+        var vao: u32 = 0;
+        gl.genVertexArrays(1, &vao);
+        gl.bindVertexArray(vao);
+
+        var vbo: u32 = 0;
+        gl.genBuffers(1, &vbo);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        var offset: usize = 0;
+        for (attribs, 0..) |attrib, i| {
+            const index: u32 = @intCast(i);
+            const attrib_offset: ?*const anyopaque = if (offset == 0) null else @ptrFromInt(offset);
+            // TODO: don't assume elements are tighly packed?
+            gl.vertexAttribPointer(index, @intCast(attrib.len), attrib.type, gl.FALSE, @intCast(elem_size), attrib_offset);
+            gl.enableVertexAttribArray(index);
+            // TODO: don't assume element attribs are tighly packed?
+            offset += attrib.size();
+        }
+        // TODO: support gl.STATIC_DRAW as well
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(n_elems * elem_size), null, gl.DYNAMIC_DRAW);
+
+        return .{
+            .vao = vao,
+            .vbo = vbo,
+            .elem_size = elem_size,
+            .n_elems = n_elems,
+        };
+    }
+
+    pub fn deinit(self: VertexBuffer) void {
+        gl.deleteBuffers(1, &self.vbo);
+        gl.deleteVertexArrays(1, &self.vao);
+    }
+
+    /// Update buffer data, sync with GPU
+    pub fn update(self: VertexBuffer, data: []const u8) void {
+        std.debug.assert(data.len == self.elem_size * self.n_elems);
+        // TODO: support gl.STATIC_DRAW as well
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(data.len), @ptrCast(data.ptr), gl.DYNAMIC_DRAW);
+    }
+
+    pub fn draw(
+        self: VertexBuffer,
+        /// gl.LINE_STRIP, gl.TRIANGLES, etc.
+        mode: gl.GLenum,
+    ) void {
+        gl.bindVertexArray(self.vao);
+        gl.drawArrays(mode, 0, @intCast(self.n_elems));
+    }
+
+    fn sizeOfGLType(gl_type: gl.GLenum) usize {
+        return switch (gl_type) {
+            gl.UNSIGNED_BYTE => @sizeOf(u8),
+            gl.UNSIGNED_SHORT => @sizeOf(u16),
+            gl.UNSIGNED_INT => @sizeOf(u32),
+            gl.FLOAT => @sizeOf(f32),
+            gl.DOUBLE => @sizeOf(f64),
+            else => |todo| std.debug.panic("'type: gl.GLenum = {}' not suppported", .{todo}),
+        };
+    }
+};

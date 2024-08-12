@@ -767,6 +767,9 @@ pub fn startBuild(
     events: *Window.EventQueue,
     window: *Window,
 ) !void {
+    @import("root").prof.startZoneN("UI.startBuild");
+    defer @import("root").prof.stopZoneN("UI.startBuild");
+
     self.hot_node_key = null;
     // get the signal in the reverse order that we render in (if a node is on top
     // of another, the top one should get the inputs, no the bottom one)
@@ -829,6 +832,9 @@ pub fn startBuild(
 }
 
 pub fn endBuild(self: *UI, dt: f32) void {
+    @import("root").prof.startZoneN("UI.endBuild");
+    defer @import("root").prof.stopZoneN("UI.endBuild");
+
     if (self.first_error_trace) |error_trace| {
         std.debug.print("Error '{s}' occurred during the UI building phase with the following error trace:\n{}\n", .{
             self.first_error_name, error_trace,

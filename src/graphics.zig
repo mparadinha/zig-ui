@@ -17,34 +17,34 @@ pub const Mesh = struct {
 
     /// 'deinit' cleans up used resources
     pub fn init(vert_data: []const f32, indices: []const u32, attribs: []const Attrib) Mesh {
-        var mesh = Mesh{ .vao = 0, .vbo = 0, .ebo = 0, .n_indices = @as(u16, @intCast(indices.len)) };
+        var mesh = Mesh{ .vao = 0, .vbo = 0, .ebo = 0, .n_indices = @intCast(indices.len) };
 
         gl.genVertexArrays(1, &mesh.vao);
         gl.bindVertexArray(mesh.vao);
 
         gl.genBuffers(1, &mesh.vbo);
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, @as(isize, @intCast(vert_data.len * @sizeOf(f32))), vert_data.ptr, gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(vert_data.len * @sizeOf(f32)), vert_data.ptr, gl.STATIC_DRAW);
 
         var stride: u32 = 0;
         for (attribs) |attrib| stride += attrib.n_elems;
         var offset: u32 = 0;
         for (attribs, 0..) |attrib, i| {
             gl.vertexAttribPointer(
-                @as(u32, @intCast(i)),
-                @as(i32, @intCast(attrib.n_elems)),
+                @intCast(i),
+                @intCast(attrib.n_elems),
                 gl.FLOAT,
                 gl.FALSE,
-                @as(i32, @intCast(stride)) * @sizeOf(f32),
+                @intCast(stride * @sizeOf(f32)),
                 if (offset == 0) null else @as(*const anyopaque, @ptrFromInt(offset)),
             );
-            gl.enableVertexAttribArray(@as(u32, @intCast(i)));
+            gl.enableVertexAttribArray(@intCast(i));
             offset += attrib.n_elems * @sizeOf(f32);
         }
 
         gl.genBuffers(1, &mesh.ebo);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.ebo);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, @as(isize, @intCast(indices.len * @sizeOf(u32))), indices.ptr, gl.STATIC_DRAW);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(indices.len * @sizeOf(u32)), indices.ptr, gl.STATIC_DRAW);
 
         return mesh;
     }

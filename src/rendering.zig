@@ -56,6 +56,9 @@ pub const ShaderInput = extern struct {
 };
 
 pub fn render(self: *UI) !void {
+    @import("root").prof.startZoneN("UI.render");
+    defer @import("root").prof.stopZoneN("UI.render");
+
     const arena = self.build_arena.allocator();
     var estimated_rect_count = self.node_table.count() * 2;
     for (self.node_table.values()) |node| estimated_rect_count += node.display_string.len;

@@ -109,15 +109,21 @@ pub fn clear(self: *Window, color: vec4) void {
     const fb_size = self.getFramebufferSize();
     gl.viewport(0, 0, @as(i32, @intCast(fb_size[0])), @as(i32, @intCast(fb_size[1])));
     gl.clearColor(color[0], color[1], color[2], color[3]);
+    @import("root").prof.startZoneN("gl.clear");
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    @import("root").prof.stopZoneN("gl.clear");
 }
 
 pub fn update(self: *Window) void {
     // discard unprocessed events from the last frame because if they were needed they would've been processed
     self.event_queue.clearRetainingCapacity();
 
+    @import("root").prof.startZoneN("window.swapBuffers");
     self.window.swapBuffers();
+    @import("root").prof.stopZoneN("window.swapBuffers");
+    @import("root").prof.startZoneN("glfw.pollEvents");
     glfw.pollEvents();
+    @import("root").prof.stopZoneN("glfw.pollEvents");
 }
 
 pub fn getFramebufferSize(self: *Window) uvec2 {
