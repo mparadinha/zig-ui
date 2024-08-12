@@ -61,7 +61,8 @@ pub fn render(self: *UI) !void {
 
     const arena = self.build_arena.allocator();
     var estimated_rect_count = self.node_table.count() * 2;
-    for (self.node_table.values()) |node| estimated_rect_count += node.display_string.len;
+    var node_it = self.node_table.valueIterator();
+    while (node_it.next()) |node| estimated_rect_count += node.display_string.len;
     var shader_inputs = try std.ArrayList(ShaderInput).initCapacity(arena, estimated_rect_count);
 
     try setupTreeForRender(self, &shader_inputs, self.root.?);

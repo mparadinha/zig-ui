@@ -13,6 +13,8 @@ const utils = @import("utils.zig");
 
 const build_opts = @import("build_opts");
 
+const prof = &@import("root").prof;
+
 const UI = @This();
 pub usingnamespace @import("widgets.zig");
 pub usingnamespace @import("layout.zig");
@@ -603,8 +605,8 @@ pub fn addNodeRawStrings(
     hash_str_in: []const u8,
     init_args: anytype,
 ) !*Node {
-    @import("root").prof.startZoneN("UI.addNodeRawStrings");
-    defer @import("root").prof.stopZoneN("UI.addNodeRawStrings");
+    prof.startZoneN("UI.addNodeRawStrings");
+    defer prof.stopZoneN("UI.addNodeRawStrings");
 
     const arena = self.build_arena.allocator();
 
@@ -624,7 +626,7 @@ pub fn addNodeRawStrings(
         break :blk hash_str_in;
     };
 
-    const node_key = self.node_table.getKeyHash(hash_str);
+    const node_key = NodeTable.hashFromKey(hash_str);
     if (try self.node_keys_this_frame.fetchPut(node_key, {})) |_| {
         // TODO: in the future this should not panic but instead save the error
         // for the user until the end of build; when we implement that we should
@@ -770,8 +772,8 @@ pub fn startBuild(
     events: *Window.EventQueue,
     window: *Window,
 ) !void {
-    @import("root").prof.startZoneN("UI.startBuild");
-    defer @import("root").prof.stopZoneN("UI.startBuild");
+    prof.startZoneN("UI.startBuild");
+    defer prof.stopZoneN("UI.startBuild");
 
     self.hot_node_key = null;
     // get the signal in the reverse order that we render in (if a node is on top
@@ -794,10 +796,12 @@ pub fn startBuild(
     // remove the `no_id` nodes from the hash table before starting this new frame
     // TODO: is this necessary or just a memory saving thing? because if it's the
     //       latter, these nodes should get yetted on the next frame anyway...
+    prof.startZoneN("UI.startBuild: prune `no_id`");
     var node_iter = self.node_table.valueIterator();
     while (node_iter.next()) |node| {
         if (node.flags.no_id) try node_iter.removeCurrent();
     }
+    prof.stopZoneN("UI.startBuild: prune `no_id`");
 
     const screen_size = vec2{ @as(f32, @floatFromInt(screen_w)), @as(f32, @floatFromInt(screen_h)) };
     self.screen_size = screen_size;
@@ -835,8 +839,8 @@ pub fn startBuild(
 }
 
 pub fn endBuild(self: *UI, dt: f32) void {
-    @import("root").prof.startZoneN("UI.endBuild");
-    defer @import("root").prof.stopZoneN("UI.endBuild");
+    prof.startZoneN("UI.endBuild");
+    defer prof.stopZoneN("UI.endBuild");
 
     if (self.first_error_trace) |error_trace| {
         std.debug.print("Error '{s}' occurred during the UI building phase with the following error trace:\n{}\n", .{
@@ -854,12 +858,14 @@ pub fn endBuild(self: *UI, dt: f32) void {
     std.debug.assert(self.parent_stack.len() == 0);
 
     // stale node pruning, or else they just keep taking up memory forever
+    prof.startZoneN("UI.endBuild: prune stale nodes");
     var node_iter = self.node_table.valueIterator();
     while (node_iter.next()) |node_ptr| {
         if (node_ptr.last_frame_touched < self.frame_idx) {
             node_iter.removeCurrent() catch unreachable;
         }
     }
+    prof.stopZoneN("UI.endBuild: prune stale nodes");
 
     // in case the hot/active/focused node key is pointing to a stale node
     if (self.hot_node_key != null and !self.node_table.hasKeyHash(self.hot_node_key.?)) self.hot_node_key = null;
@@ -896,6 +902,9 @@ fn computeSignalsForTree(self: *UI, root: *Node) !void {
 }
 
 pub fn computeSignalFromNode(self: *UI, node: *Node) !Signal {
+    prof.startZoneN("UI.computeSignalFromNode");
+    defer prof.stopZoneN("UI.computeSignalFromNode");
+
     var signal = Signal{
         .node = node,
         .mouse_pos = self.mouse_pos - node.rect.min,
@@ -1058,8 +1067,8 @@ pub fn textPosFromNode(self: *UI, node: *Node) vec2 {
 }
 
 fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
-    @import("root").prof.startZoneN("UI.calcTextRect");
-    defer @import("root").prof.stopZoneN("UI.calcTextRect");
+    prof.startZoneN("UI.calcTextRect");
+    defer prof.stopZoneN("UI.calcTextRect");
 
     const font: *Font = switch (node.font_type) {
         .text => &self.font,
@@ -1201,8 +1210,8 @@ pub fn indexOfNthScalar(slice: []const u8, scalar: u8, nth: usize) ?usize {
 }
 
 pub fn fmtTmpString(ui: *UI, comptime fmt: []const u8, args: anytype) []const u8 {
-    @import("root").prof.startZoneN("UI.fmtTmpString");
-    defer @import("root").prof.stopZoneN("UI.fmtTmpString");
+    prof.startZoneN("UI.fmtTmpString");
+    defer prof.stopZoneN("UI.fmtTmpString");
 
     return std.fmt.allocPrint(ui.build_arena.allocator(), fmt, args) catch |e| {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
@@ -1322,115 +1331,226 @@ pub fn Stack(comptime T: type) type {
 
 /// Hash map where pointers to entries remains stable when adding new ones.
 /// Supports removing entries while iterating over them.
+// pub const NodeTable = struct {
+//     allocator: Allocator,
+//     ptr_map: PtrMap,
+
+//     const K = []const u8;
+//     const V = Node;
+//     const Hash = u64;
+//     const PtrMap = std.ArrayHashMap(Hash, *V, struct {
+//         pub fn hash(_: @This(), key: Hash) u32 {
+//             return @truncate(key);
+//         }
+//         pub fn eql(_: @This(), a: Hash, b: Hash, _: usize) bool {
+//             return a == b;
+//         }
+//     }, false);
+
+//     pub fn init(allocator: Allocator) NodeTable {
+//         return .{
+//             .allocator = allocator,
+//             .ptr_map = PtrMap.init(allocator),
+//         };
+//     }
+
+//     pub fn deinit(self: *NodeTable) void {
+//         var ptr_iter = self.ptr_map.iterator();
+//         while (ptr_iter.next()) |entry| self.allocator.destroy(entry.value_ptr.*);
+//         self.ptr_map.deinit();
+//     }
+
+//     pub const GetOrPutResult = struct { found_existing: bool, value_ptr: *V };
+
+//     pub fn getOrPut(self: *NodeTable, key: K) !GetOrPutResult {
+//         return self.getOrPutHash(NodeTable.hashFromKey(key));
+//     }
+
+//     pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GetOrPutResult {
+//         prof.startZoneN("NodeTable.getOrPutHash");
+//         defer prof.stopZoneN("NodeTable.getOrPutHash");
+//         const gop = try self.ptr_map.getOrPut(hash);
+//         if (!gop.found_existing) {
+//             const value_ptr = try self.allocator.create(V);
+//             gop.value_ptr.* = value_ptr;
+//         }
+//         return GetOrPutResult{
+//             .found_existing = gop.found_existing,
+//             .value_ptr = gop.value_ptr.*,
+//         };
+//     }
+
+//     pub fn hashFromKey(_: NodeTable, key: K) Hash {
+//         prof.startZoneN("NodeTable.hashFromKey");
+//         defer prof.stopZoneN("NodeTable.hashFromKey");
+//         return std.hash_map.hashString(key);
+//     }
+
+//     pub fn getFromHash(self: NodeTable, hash: Hash) ?*V {
+//         return self.ptr_map.get(hash);
+//     }
+
+//     /// does nothing if the key doesn't exist
+//     pub fn remove(self: *NodeTable, key: K) void {
+//         const hash = NodeTable.hashFromKey(key);
+//         if (self.ptr_map.fetchSwapRemove(hash)) |pair| {
+//             self.allocator.destroy(pair.value.*);
+//         }
+//     }
+
+//     pub fn removeAt(self: *NodeTable, idx: usize) void {
+//         const node_ptr = self.ptr_map.values()[idx];
+//         self.allocator.destroy(node_ptr);
+//         self.ptr_map.swapRemoveAt(idx);
+//     }
+
+//     pub fn hasKey(self: *NodeTable, key: K) bool {
+//         return self.hasKeyHash(NodeTable.hashFromKey(key));
+//     }
+
+//     pub fn hasKeyHash(self: *NodeTable, hash: Hash) bool {
+//         return self.ptr_map.contains(hash);
+//     }
+
+//     pub fn count(self: NodeTable) usize {
+//         return self.ptr_map.count();
+//     }
+
+//     /// Any adding/removing to/from the table might invalidate this array
+//     pub fn values(self: *NodeTable) []*V {
+//         return self.ptr_map.values();
+//     }
+
+//     pub fn valueIterator(self: *NodeTable) ValueIterator {
+//         return ValueIterator{ .iter = self.ptr_map.iterator(), .table = self };
+//     }
+
+//     pub const ValueIterator = struct {
+//         iter: PtrMap.Iterator,
+//         table: *NodeTable,
+
+//         pub fn next(it: *ValueIterator) ?*V {
+//             const iter_next = it.iter.next();
+//             return if (iter_next) |entry| entry.value_ptr.* else null;
+//         }
+
+//         pub fn removeCurrent(it: *ValueIterator) !void {
+//             if (it.iter.index > 0) it.iter.index -= 1;
+//             it.table.removeAt(it.iter.index);
+//             it.iter.len -= 1;
+//         }
+//     };
+// };
+pub const NodeList = struct {
+    pub const Entry = struct {
+        list_next: ?*Entry,
+        list_prev: ?*Entry,
+        hash_next: ?*Entry,
+        hash_prev: ?*Entry,
+        node: Node,
+    };
+};
 pub const NodeTable = struct {
     allocator: Allocator,
-    ptr_map: PtrMap,
+    buckets: [bucket_count]Bucket,
 
     const K = []const u8;
     const V = Node;
-    const Hash = u64;
-    const PtrMap = std.ArrayHashMap(Hash, *V, struct {
-        pub fn hash(_: @This(), key: Hash) u32 {
-            return @truncate(key);
-        }
-        pub fn eql(_: @This(), a: Hash, b: Hash, _: usize) bool {
-            return a == b;
-        }
-    }, false);
+    pub const Hash = u64;
+
+    pub const Bucket = std.SegmentedList(Entry, 0);
+    pub const Entry = struct { hash: Hash, value_ptr: *V };
+
+    pub const bucket_count = 64;
 
     pub fn init(allocator: Allocator) NodeTable {
-        return .{
-            .allocator = allocator,
-            .ptr_map = PtrMap.init(allocator),
-        };
+        return .{ .allocator = allocator, .buckets = [_]Bucket{.{}} ** bucket_count };
     }
 
     pub fn deinit(self: *NodeTable) void {
-        var ptr_iter = self.ptr_map.iterator();
-        while (ptr_iter.next()) |entry| self.allocator.destroy(entry.value_ptr.*);
-        self.ptr_map.deinit();
-    }
-
-    pub const GetOrPutResult = struct { found_existing: bool, value_ptr: *V };
-
-    pub fn getOrPut(self: *NodeTable, key: K) !GetOrPutResult {
-        return self.getOrPutHash(self.getKeyHash(key));
-    }
-
-    pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GetOrPutResult {
-        @import("root").prof.startZoneN("NodeTable.getOrPutHash");
-        defer @import("root").prof.stopZoneN("NodeTable.getOrPutHash");
-        const gop = try self.ptr_map.getOrPut(hash);
-        if (!gop.found_existing) {
-            const value_ptr = try self.allocator.create(V);
-            gop.value_ptr.* = value_ptr;
+        for (&self.buckets) |*bucket| {
+            var entry_it = bucket.iterator(0);
+            while (entry_it.next()) |entry| self.allocator.destroy(entry.value_ptr);
+            bucket.deinit(self.allocator);
         }
-        return GetOrPutResult{
-            .found_existing = gop.found_existing,
-            .value_ptr = gop.value_ptr.*,
-        };
     }
 
-    pub fn getKeyHash(_: NodeTable, key: K) Hash {
-        @import("root").prof.startZoneN("NodeTable.getKeyHash");
-        defer @import("root").prof.stopZoneN("NodeTable.getKeyHash");
-        return std.hash_map.hashString(key);
+    pub const GOP = struct { found_existing: bool, value_ptr: *V };
+
+    pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GOP {
+        prof.startZoneN("NodeTable.getOrPutHash");
+        defer prof.stopZoneN("NodeTable.getOrPutHash");
+        const bucket_idx = hash % self.buckets.len;
+        const bucket = &self.buckets[bucket_idx];
+        var entry_iter = bucket.iterator(0);
+        while (entry_iter.next()) |entry| {
+            if (entry.hash == hash) return .{ .found_existing = true, .value_ptr = entry.value_ptr };
+        }
+        prof.startZoneN("NodeTable.getOrPutHash: alloc");
+        defer prof.stopZoneN("NodeTable.getOrPutHash: alloc");
+        const new_entry = try bucket.addOne(self.allocator);
+        new_entry.hash = hash;
+        new_entry.value_ptr = try self.allocator.create(V);
+        return .{ .found_existing = false, .value_ptr = new_entry.value_ptr };
     }
 
     pub fn getFromHash(self: NodeTable, hash: Hash) ?*V {
-        return self.ptr_map.get(hash);
-    }
-
-    /// does nothing if the key doesn't exist
-    pub fn remove(self: *NodeTable, key: K) void {
-        const hash = self.getKeyHash(key);
-        if (self.ptr_map.fetchSwapRemove(hash)) |pair| {
-            self.allocator.destroy(pair.value.*);
+        const bucket_idx = hash % self.buckets.len;
+        const bucket = self.buckets[bucket_idx];
+        var entry_iter = bucket.constIterator(0);
+        while (entry_iter.next()) |entry| {
+            if (entry.hash == hash) return entry.value_ptr;
         }
+        return null;
     }
 
-    pub fn removeAt(self: *NodeTable, idx: usize) void {
-        const node_ptr = self.ptr_map.values()[idx];
-        self.allocator.destroy(node_ptr);
-        self.ptr_map.swapRemoveAt(idx);
+    pub fn hasKeyHash(self: NodeTable, hash: Hash) bool {
+        return self.getFromHash(hash) != null;
     }
 
-    pub fn hasKey(self: *NodeTable, key: K) bool {
-        return self.hasKeyHash(self.getKeyHash(key));
-    }
-
-    pub fn hasKeyHash(self: *NodeTable, hash: Hash) bool {
-        return self.ptr_map.contains(hash);
+    pub fn hashFromKey(key: K) Hash {
+        prof.startZoneN("NodeTable.hashFromKey");
+        defer prof.stopZoneN("NodeTable.hashFromKey");
+        return std.hash_map.hashString(key);
     }
 
     pub fn count(self: NodeTable) usize {
-        return self.ptr_map.count();
-    }
-
-    /// Any adding/removing to/from the table might invalidate this array
-    pub fn values(self: *NodeTable) []*V {
-        return self.ptr_map.values();
-    }
-
-    pub fn valueIterator(self: *NodeTable) ValueIterator {
-        return ValueIterator{ .iter = self.ptr_map.iterator(), .table = self };
+        var sum: usize = 0;
+        for (self.buckets) |bucket| sum += bucket.count();
+        return sum;
     }
 
     pub const ValueIterator = struct {
-        iter: PtrMap.Iterator,
         table: *NodeTable,
+        bucket_idx: usize = 0,
+        bucket_iter: ?Bucket.Iterator = null,
 
-        pub fn next(it: *ValueIterator) ?*V {
-            const iter_next = it.iter.next();
-            return if (iter_next) |entry| entry.value_ptr.* else null;
+        pub fn next(self: *ValueIterator) ?*V {
+            if (self.bucket_idx >= self.table.buckets.len) return null;
+            if (self.bucket_iter == null)
+                self.bucket_iter = self.table.buckets[self.bucket_idx].iterator(0);
+            while (self.bucket_iter.?.peek() == null) {
+                self.bucket_idx += 1;
+                if (self.bucket_idx >= self.table.buckets.len) return null;
+                self.bucket_iter = self.table.buckets[self.bucket_idx].iterator(0);
+            }
+            return if (self.bucket_iter.?.next()) |entry| entry.value_ptr else null;
         }
 
-        pub fn removeCurrent(it: *ValueIterator) !void {
-            if (it.iter.index > 0) it.iter.index -= 1;
-            it.table.removeAt(it.iter.index);
-            it.iter.len -= 1;
+        pub fn removeCurrent(self: *ValueIterator) !void {
+            if (self.bucket_iter) |*bucket_it| {
+                const prev = bucket_it.prev().?;
+                self.table.allocator.destroy(prev.value_ptr);
+                const last = bucket_it.list.pop().?;
+                prev.* = last;
+                _ = bucket_it.prev();
+            }
         }
     };
+
+    pub fn valueIterator(self: *NodeTable) ValueIterator {
+        return .{ .table = self };
+    }
 };
 
 pub const PRNG = struct {

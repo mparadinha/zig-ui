@@ -13,6 +13,8 @@ const UI = zig_ui.UI;
 pub var prof = Profiler{};
 const fps_value: f32 = 1.0 / 60.0;
 var max_graph_y: f32 = fps_value * 1.5;
+var auto_size_graph: bool = true;
+var zone_table_include_children: bool = true;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -39,6 +41,7 @@ pub fn main() !void {
     };
     defer demo.current_tabs.deinit();
     var show_profiler_graph = true;
+    var profiler_graph_rect: UI.Rect = undefined;
 
     var last_time: f32 = @floatCast(glfw.getTime());
     while (!window.shouldClose()) {
@@ -58,7 +61,7 @@ pub fn main() !void {
 
         try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
-        if (show_profiler_graph) showProfilerInfo(&ui);
+        if (show_profiler_graph) profiler_graph_rect = showProfilerInfo(&ui);
         ui.endBuild(dt);
 
         if (window.event_queue.searchAndRemove(.KeyDown, .{
@@ -76,7 +79,7 @@ pub fn main() !void {
         try ui.render();
         if (dbg_ui_view.active) try dbg_ui_view.show(&ui, fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window, dt);
         if (demo.show_zoom) try renderZoomDisplay(allocator, demo, fbsize);
-        if (show_profiler_graph) try renderProfilerGraph(allocator, demo, prof, fbsize);
+        if (show_profiler_graph) try renderProfilerGraph(allocator, prof, profiler_graph_rect, fbsize);
 
         window.update();
     }
@@ -655,13 +658,19 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
 }
 
 pub const Profiler = struct {
-    zone_buckets: [20]Bucket = [_]Bucket{.{}} ** 20,
+    zone_buckets: [bucket_count]Bucket = [_]Bucket{.{}} ** bucket_count,
     frame_times: [Zone.number_of_samples]f32 = [_]f32{0} ** Zone.number_of_samples,
     frame_start: i128 = 0,
     frame_idx: usize = 0,
+    zone_stack: std.BoundedArray(*Zone, max_zone_nesting) = .{},
 
-    const Bucket = std.BoundedArray(Entry, 5);
+    const Bucket = std.BoundedArray(Entry, bucket_entries);
     const Entry = struct { key: []const u8, hash: u64, zone: Zone };
+    const EntryIdx = struct { bucket: usize, entry: usize };
+
+    pub const bucket_count = 32;
+    pub const bucket_entries = 5;
+    pub const max_zone_nesting = 32;
 
     pub const ZoneIter = struct {
         buckets: []Bucket,
@@ -721,22 +730,40 @@ pub const Profiler = struct {
             zone.* = .{ .color = color };
         }
         zone.start();
+        self.zone_stack.append(zone) catch @panic("OOM");
     }
 
     pub fn stopZoneN(self: *Profiler, comptime name: []const u8) void {
         const zone = self.gopZoneN(name).value_ptr;
+        const zone_time = self.zone_stack.pop().elapsed();
         zone.stop();
+        if (self.zone_stack.len > 0) {
+            const parent = self.zone_stack.slice()[self.zone_stack.len - 1];
+            parent.acc_child_sample += zone_time;
+        }
+    }
+
+    pub fn stopZone(self: *Profiler) void {
+        const zone = self.zone_stack.pop();
+        const zone_time = zone.elapsed();
+        zone.stop();
+        if (self.zone_stack.len > 0) {
+            const parent = self.zone_stack.slice()[self.zone_stack.len - 1];
+            parent.acc_child_sample += zone_time;
+        }
     }
 };
 
 pub const Zone = struct {
     samples: [number_of_samples]f32 = [_]f32{0} ** number_of_samples,
     sample_counter: [number_of_samples]u32 = [_]u32{0} ** number_of_samples,
+    child_samples: [number_of_samples]f32 = [_]f32{0} ** number_of_samples,
     idx: usize = 0,
 
     start_timestamp: ?i128 = null,
     acc_sample: i128 = 0,
     acc_counter: u32 = 0,
+    acc_child_sample: i128 = 0,
 
     color: vec4,
     display: bool = true,
@@ -747,40 +774,102 @@ pub const Zone = struct {
         self.start_timestamp = std.time.nanoTimestamp();
     }
 
+    pub fn elapsed(self: *Zone) i128 {
+        return std.time.nanoTimestamp() - self.start_timestamp.?;
+    }
+
     pub fn stop(self: *Zone) void {
-        const timestamp = std.time.nanoTimestamp();
-        const elapsed_ns = timestamp - self.start_timestamp.?;
-        self.start_timestamp = null;
-        self.acc_sample += elapsed_ns;
+        self.acc_sample += self.elapsed();
         self.acc_counter += 1;
+        self.start_timestamp = null;
     }
 
     pub fn commit(self: *Zone) void {
         self.samples[self.idx] = @as(f32, @floatFromInt(self.acc_sample)) / std.time.ns_per_s;
         self.sample_counter[self.idx] = self.acc_counter;
+        self.child_samples[self.idx] = @as(f32, @floatFromInt(self.acc_child_sample)) / std.time.ns_per_s;
         self.acc_sample = 0;
         self.acc_counter = 0;
+        self.acc_child_sample = 0;
         self.idx += 1;
         self.idx %= number_of_samples;
     }
 };
 
-fn showProfilerInfo(ui: *UI) void {
-    const w = ui.startWindow("profiler_window", UI.Size.exact(.percent, 1, 1), UI.RelativePlacement.simple(vec2{ 0, 0 }));
-    defer ui.endWindow(w);
-    {
-        ui.startLine();
-        defer ui.endLine();
-        ui.labelF("max_graph_y: {d: >4.1}", .{max_graph_y * 1000});
-        ui.slider(f32, "max_graph_y", UI.Size.exact(.em, 50, 1), &max_graph_y, 0, 0.1);
-        ui.topParent().last.?.flags.floating_y = true;
-        ui.topParent().last.?.rel_pos = UI.RelativePlacement.match(.center);
+fn reduceSlice(comptime T: type, comptime op: std.builtin.ReduceOp, values: []const T) T {
+    prof.startZoneN("reduceSlice(" ++ @typeName(T) ++ ", ." ++ @tagName(op) ++ ", ...)");
+    defer prof.stopZone();
+
+    const Len = std.simd.suggestVectorLength(T) orelse 1;
+    const V = @Vector(Len, T);
+
+    var result: T = switch (op) {
+        .And => ~0,
+        .Or => 0,
+        .Xor => @panic("TODO"),
+        .Min => switch (@typeInfo(T)) {
+            .Int => std.math.maxInt(T),
+            .Float => std.math.floatMax(T),
+            else => |todo| @panic("TODO: " ++ @tagName(todo)),
+        },
+        .Max => switch (@typeInfo(T)) {
+            .Int => std.math.minInt(T),
+            .Float => std.math.floatMin(T),
+            else => |todo| @panic("TODO: " ++ @tagName(todo)),
+        },
+        .Add => 0,
+        .Mul => 1,
+    };
+
+    var idx: usize = 0;
+    while (idx + Len < values.len) {
+        const vec_result = @reduce(op, @as(V, values[idx..][0..Len].*));
+        result = @reduce(op, @Vector(2, T){ result, vec_result });
+        idx += Len;
     }
+    for (values[idx..]) |v| result = @reduce(op, @Vector(2, T){ result, v });
+
+    return result;
+}
+fn helperShowNodeTableHist(ui: *UI) void {
+    prof.startZoneN("helperShowNodeTableHist");
+    defer prof.stopZone();
+
+    ui.pushStyle(.{ .font_size = 14 });
+    defer _ = ui.popStyle();
+    ui.startLine();
+    defer ui.endLine();
+    const max_bar_height = 100; // in px
+    var max_count: usize = 0;
+    for (ui.node_table.buckets) |bucket| {
+        max_count = @max(max_count, bucket.count());
+    }
+    for (ui.node_table.buckets, 0..) |bucket, idx| {
+        _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.em(1.1, 1), UI.Size.children(1) }, .y);
+        defer _ = ui.popParent();
+        ui.labelBoxF("{: >2}", .{idx});
+        const count = bucket.count();
+        ui.labelF("{:0>2}", .{count});
+        const bar_size = max_bar_height * @as(f32, @floatFromInt(count)) / @as(f32, @floatFromInt(max_count));
+        _ = ui.addNode(.{
+            .draw_border = true,
+            .draw_background = true,
+            .no_id = true,
+        }, "", .{ .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.pixels(bar_size, 1) } });
+    }
+}
+fn helperShowZoneTable(ui: *UI) void {
+    prof.startZoneN("helperShowZoneTable");
+    defer prof.stopZoneN("helperShowZoneTable");
+
+    _ = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.children2(1, 1), .y);
+    defer _ = ui.popParent();
+
     const columns: []const struct {
         name: []const u8,
         size: f32, // in `em`
     } = &.{
-        .{ .name = "zone", .size = 15 },
+        .{ .name = "zone", .size = 17 },
         .{ .name = "% of frame", .size = 5 },
         .{ .name = "ms/frame", .size = 5 },
         .{ .name = "calls/frame", .size = 6 },
@@ -797,36 +886,49 @@ fn showProfilerInfo(ui: *UI) void {
         }
     }
     var zone_entries = blk: {
-        const ZoneEntry = struct { key: []const u8, zone: *Zone };
-        var array = std.BoundedArray(ZoneEntry, 20 * 5){};
+        const ZoneEntry = struct {
+            key: []const u8,
+            zone: *Zone,
+            total_time: f32,
+            total_calls: u32,
+        };
+        var array = std.BoundedArray(ZoneEntry, Profiler.bucket_count * Profiler.bucket_entries){};
         for (&prof.zone_buckets) |*bucket| {
             for (bucket.slice()) |*entry| {
-                array.append(.{ .key = entry.key, .zone = &entry.zone }) catch unreachable;
+                const zone = &entry.zone;
+                array.append(.{
+                    .key = entry.key,
+                    .zone = zone,
+                    .total_time = if (zone_table_include_children)
+                        reduceSlice(f32, .Add, &zone.samples)
+                    else
+                        reduceSlice(f32, .Add, &zone.samples) - reduceSlice(f32, .Add, &zone.child_samples),
+                    .total_calls = reduceSlice(u32, .Add, &zone.sample_counter),
+                }) catch unreachable;
             }
         }
         // TODO: support sorting by other attributes (and reverse-sorting)
+        prof.startZoneN("sort table entries");
         std.sort.insertion(ZoneEntry, array.slice(), {}, (struct {
             pub fn func(_: void, lhs: ZoneEntry, rhs: ZoneEntry) bool {
-                const V = @Vector(Zone.number_of_samples, f32);
-                return @reduce(.Add, @as(V, lhs.zone.samples)) >= @reduce(.Add, @as(V, rhs.zone.samples));
+                return lhs.total_time >= rhs.total_time;
             }
         }).func);
+        prof.stopZoneN("sort table entries");
 
         break :blk array;
     };
+    const total_frame_time = reduceSlice(f32, .Add, &prof.frame_times);
     for (zone_entries.slice()) |entry| {
         const name = entry.key;
         const zone = entry.zone;
-        const V_f32 = @Vector(Zone.number_of_samples, f32);
-        const V_u32 = @Vector(Zone.number_of_samples, u32);
-        const zone_total_time = @reduce(.Add, @as(V_f32, zone.samples));
-        const zone_total_calls = @reduce(.Add, @as(V_u32, zone.sample_counter));
-        const zone_total_pct_of_frame = @reduce(.Add, @as(V_f32, zone.samples) / @as(V_f32, prof.frame_times));
+        const zone_total_time = entry.total_time;
+        const zone_total_calls = entry.total_calls;
         const n_samples: f32 = @floatFromInt(zone.samples.len);
         const avg_ms_per_frame = (zone_total_time / @as(f32, n_samples)) * 1000;
         const avg_calls_per_frame = @as(f32, @floatFromInt(zone_total_calls)) / n_samples;
         const avg_ms_per_call = avg_ms_per_frame / avg_calls_per_frame;
-        const avg_pct_of_frame = zone_total_pct_of_frame / n_samples;
+        const avg_pct_of_frame = zone_total_time / total_frame_time;
 
         ui.startLine();
         defer ui.endLine();
@@ -845,6 +947,7 @@ fn showProfilerInfo(ui: *UI) void {
             ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
             defer _ = ui.popParent();
 
+            ui.spacer(.x, UI.Size.em(0.1, 1));
             // TODO: turn this into a button that opens a color picker
             _ = ui.addNode(.{
                 .draw_background = true,
@@ -898,8 +1001,33 @@ fn showProfilerInfo(ui: *UI) void {
         }
     }
 }
+fn showProfilerInfo(ui: *UI) UI.Rect {
+    const w = ui.startWindow("profiler_window", UI.Size.exact(.percent, 1, 1), UI.RelativePlacement.simple(vec2{ 0, 0 }));
+    defer ui.endWindow(w);
+    {
+        ui.startLine();
+        defer ui.endLine();
+        _ = ui.checkBox("Auto-size graph", &auto_size_graph);
+        ui.labelF("max_graph_y: {d: >4.1}", .{max_graph_y * 1000});
+        const slider_size = [2]UI.Size{ UI.Size.em(50, 1), UI.Size.em(1, 1) };
+        ui.slider(f32, "max_graph_y", slider_size, &max_graph_y, 0, 0.1);
+    }
+    _ = ui.checkBox("Include children in zone time", &zone_table_include_children);
+    helperShowNodeTableHist(ui);
+    {
+        _ = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.flexible(.percent, 1, 1), .x);
+        defer _ = ui.popParent();
+        helperShowZoneTable(ui);
+        const profiler_graph_node = ui.addNode(.{
+            .draw_border = true,
+        }, "profiler_graph_node", .{
+            .size = UI.Size.flexible(.percent, 1, 1),
+        });
+        return profiler_graph_node.rect;
+    }
+}
 
-fn renderProfilerGraph(allocator: Allocator, demo: DemoState, profiler: Profiler, fbsize: uvec2) !void {
+fn renderProfilerGraph(allocator: Allocator, profiler: Profiler, rect: UI.Rect, fbsize: uvec2) !void {
     prof.startZoneN("renderProfilerGraph");
     defer prof.stopZoneN("renderProfilerGraph");
     // TODO: change UI render backend to operate on primitives (lines, dots, triangles, rects)
@@ -912,9 +1040,13 @@ fn renderProfilerGraph(allocator: Allocator, demo: DemoState, profiler: Profiler
         \\in float sample;
         \\uniform uint sample_count;
         \\uniform float max_y;
+        \\uniform vec2 btmleft;
+        \\uniform vec2 size;
+        \\uniform vec2 screen_size;
         \\void main() {
-        \\    vec2 graph_pos = vec2(gl_VertexID / float(max(1, sample_count) - 1), sample / max_y);
-        \\    vec2 pos = graph_pos * 2 - vec2(1);
+        \\    vec2 pos_graph = vec2(gl_VertexID / float(max(1, sample_count) - 1), sample / max_y);
+        \\    vec2 pos_px = (pos_graph * size) + btmleft;
+        \\    vec2 pos = (pos_px / screen_size) * 2 - vec2(1);
         \\    gl_Position = vec4(pos, 0, 1);
         \\}
         ,
@@ -927,10 +1059,17 @@ fn renderProfilerGraph(allocator: Allocator, demo: DemoState, profiler: Profiler
     });
     defer shader.deinit();
 
-    _ = fbsize;
-    _ = demo;
+    if (auto_size_graph) {
+        max_graph_y = 0;
+        var zone_it = prof.zoneIter();
+        while (zone_it.next()) |zone|
+            max_graph_y = @max(max_graph_y, reduceSlice(f32, .Max, &zone.samples));
+    }
+
     shader.bind();
-    // shader.set("screen_size", @as(vec2, @floatFromInt(fbsize)));
+    shader.set("btmleft", rect.min);
+    shader.set("size", rect.size());
+    shader.set("screen_size", @as(vec2, @floatFromInt(fbsize)));
     shader.set("max_y", max_graph_y);
     for (profiler.zone_buckets) |bucket| {
         for (bucket.slice()) |entry| {
