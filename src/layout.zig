@@ -7,9 +7,11 @@ const UI = @import("UI.zig");
 const Node = UI.Node;
 const Axis = UI.Axis;
 
+const prof = &@import("root").prof;
+
 pub fn layoutTree(self: *UI, root: *Node) void {
-    @import("root").prof.startZoneN("UI.layoutTree");
-    defer @import("root").prof.stopZoneN("UI.layoutTree");
+    prof.startZoneN("UI.layoutTree");
+    defer prof.stopZone();
     solveIndependentSizes(self, root);
     solveDownwardDependent(self, root);
     solveUpwardDependent(self, root);

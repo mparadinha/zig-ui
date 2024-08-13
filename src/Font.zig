@@ -9,6 +9,8 @@ const c = @cImport({
     @cInclude("stb_truetype.h");
 });
 
+const prof = &@import("root").prof;
+
 const Font = @This();
 
 allocator: Allocator,
@@ -102,6 +104,9 @@ pub fn buildTextAt(
     pixel_size: f32,
     start_pos: vec2,
 ) ![]Quad {
+    prof.startZoneN("Font.buildTextAt");
+    defer prof.stopZone();
+
     const char_map = try self.getSizedCharMap(pixel_size);
     const metrics = char_map.metrics;
     const scale = char_map.scale;

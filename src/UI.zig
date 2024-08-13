@@ -613,7 +613,7 @@ pub fn addNodeRawStrings(
     init_args: anytype,
 ) !*Node {
     prof.startZoneN("UI.addNodeRawStrings");
-    defer prof.stopZoneN("UI.addNodeRawStrings");
+    defer prof.stopZone();
 
     const arena = self.build_arena.allocator();
 
@@ -780,7 +780,7 @@ pub fn startBuild(
     window: *Window,
 ) !void {
     prof.startZoneN("UI.startBuild");
-    defer prof.stopZoneN("UI.startBuild");
+    defer prof.stopZone();
 
     self.hot_node_key = null;
     // get the signal in the reverse order that we render in (if a node is on top
@@ -843,7 +843,7 @@ pub fn startBuild(
 
 pub fn endBuild(self: *UI, dt: f32) void {
     prof.startZoneN("UI.endBuild");
-    defer prof.stopZoneN("UI.endBuild");
+    defer prof.stopZone();
 
     if (self.first_error_trace) |error_trace| {
         std.debug.print("Error '{s}' occurred during the UI building phase with the following error trace:\n{}\n", .{
@@ -868,7 +868,7 @@ pub fn endBuild(self: *UI, dt: f32) void {
             node_iter.removeCurrent() catch unreachable;
         }
     }
-    prof.stopZoneN("UI.endBuild: prune stale nodes");
+    prof.stopZone();
 
     // in case the hot/active/focused node key is pointing to a stale node
     if (self.hot_node_key != null and !self.node_table.hasKeyHash(self.hot_node_key.?)) self.hot_node_key = null;
@@ -906,7 +906,7 @@ fn computeSignalsForTree(self: *UI, root: *Node) !void {
 
 pub fn computeSignalFromNode(self: *UI, node: *Node) !Signal {
     prof.startZoneN("UI.computeSignalFromNode");
-    defer prof.stopZoneN("UI.computeSignalFromNode");
+    defer prof.stopZone();
 
     var signal = Signal{
         .node = node,
@@ -1066,7 +1066,7 @@ pub fn textPosFromNode(_: *UI, node: *Node) vec2 {
 
 fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
     prof.startZoneN("UI.calcTextRect");
-    defer prof.stopZoneN("UI.calcTextRect");
+    defer prof.stopZone();
 
     const font = self.font_cache.getFont(node.font_type);
 
@@ -1204,7 +1204,7 @@ pub fn indexOfNthScalar(slice: []const u8, scalar: u8, nth: usize) ?usize {
 
 pub fn fmtTmpString(ui: *UI, comptime fmt: []const u8, args: anytype) []const u8 {
     prof.startZoneN("UI.fmtTmpString");
-    defer prof.stopZoneN("UI.fmtTmpString");
+    defer prof.stopZone();
 
     return std.fmt.allocPrint(ui.build_arena.allocator(), fmt, args) catch |e| {
         ui.setErrorInfo(@errorReturnTrace(), @errorName(e));
@@ -1361,7 +1361,7 @@ pub fn Stack(comptime T: type) type {
 
 //     pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GetOrPutResult {
 //         prof.startZoneN("NodeTable.getOrPutHash");
-//         defer prof.stopZoneN("NodeTable.getOrPutHash");
+//         defer prof.stopZone();
 //         const gop = try self.ptr_map.getOrPut(hash);
 //         if (!gop.found_existing) {
 //             const value_ptr = try self.allocator.create(V);
@@ -1375,7 +1375,7 @@ pub fn Stack(comptime T: type) type {
 
 //     pub fn hashFromKey(_: NodeTable, key: K) Hash {
 //         prof.startZoneN("NodeTable.hashFromKey");
-//         defer prof.stopZoneN("NodeTable.hashFromKey");
+//         defer prof.stopZone();
 //         return std.hash_map.hashString(key);
 //     }
 
@@ -1472,7 +1472,7 @@ pub const NodeTable = struct {
 
     pub fn getOrPutHash(self: *NodeTable, hash: Hash) !GOP {
         prof.startZoneN("NodeTable.getOrPutHash");
-        defer prof.stopZoneN("NodeTable.getOrPutHash");
+        defer prof.stopZone();
         const bucket_idx = hash % self.buckets.len;
         const bucket = &self.buckets[bucket_idx];
         var entry_iter = bucket.iterator(0);
@@ -1480,7 +1480,7 @@ pub const NodeTable = struct {
             if (entry.hash == hash) return .{ .found_existing = true, .value_ptr = entry.value_ptr };
         }
         prof.startZoneN("NodeTable.getOrPutHash: alloc");
-        defer prof.stopZoneN("NodeTable.getOrPutHash: alloc");
+        defer prof.stopZone();
         const new_entry = try bucket.addOne(self.allocator);
         new_entry.hash = hash;
         new_entry.value_ptr = try self.allocator.create(V);
@@ -1503,7 +1503,7 @@ pub const NodeTable = struct {
 
     pub fn hashFromKey(key: K) Hash {
         prof.startZoneN("NodeTable.hashFromKey");
-        defer prof.stopZoneN("NodeTable.hashFromKey");
+        defer prof.stopZone();
         return std.hash_map.hashString(key);
     }
 
@@ -1559,21 +1559,7 @@ pub const FontCache = struct {
     quad_cache: QuadCache,
     frame_idx: usize,
 
-    pub const QuadCache = std.HashMap(CacheKey, CacheValue, struct {
-        /// Floats cannot use the 'auto hash' because floats values are not
-        /// guaranteed to have unique representations. For example, there's
-        /// multiple bit patterns for NaN, inf., +0 vs -0, etc.
-        /// This function will treats those as if they are distinct values.
-        /// Note that padding bytes in non-packed struct have no defined value,
-        /// which might also lead to incorrect cache-misses.
-        pub fn hash(_: @This(), key: CacheKey) u64 {
-            // on the inside we're all the same: just a bunch'a bytes
-            return std.hash_map.hashString(std.mem.asBytes(&key));
-        }
-        pub fn eql(_: @This(), a: CacheKey, b: CacheKey) bool {
-            return (a.str_hash == b.str_hash) and (a.font_type == b.font_type) and (a.font_size == b.font_size);
-        }
-    }, std.hash_map.default_max_load_percentage);
+    pub const QuadCache = utils.StaticHashTable(CacheKey, CacheValue, 128, 32);
     pub const CacheKey = struct {
         str_hash: u64,
         font_type: FontType,
@@ -1592,7 +1578,7 @@ pub const FontCache = struct {
             .bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
             .italic = try Font.fromTTF(allocator, font_opts.italic_font_path),
             .icon = try Font.fromTTF(allocator, font_opts.icon_font_path),
-            .quad_cache = QuadCache.init(allocator),
+            .quad_cache = .{},
             .frame_idx = 0,
         };
     }
@@ -1602,9 +1588,8 @@ pub const FontCache = struct {
         self.bold.deinit();
         self.italic.deinit();
         self.icon.deinit();
-        var cache_v_it = self.quad_cache.valueIterator();
-        while (cache_v_it.next()) |v| self.allocator.free(v.quads);
-        self.quad_cache.deinit();
+        var cache_it = self.quad_cache.iterator();
+        while (cache_it.next()) |entry| self.allocator.free(entry.value.quads);
     }
 
     pub fn getFont(self: *FontCache, font_type: FontType) *Font {
@@ -1616,21 +1601,11 @@ pub const FontCache = struct {
         };
     }
 
-    pub fn textRect(
-        self: *FontCache,
-        str: []const u8,
-        font_type: FontType,
-        font_size: f32,
-    ) !Rect {
+    pub fn textRect(self: *FontCache, str: []const u8, font_type: FontType, font_size: f32) !Rect {
         return (try self.buildText(str, font_type, font_size)).rect;
     }
 
-    pub fn textQuads(
-        self: *FontCache,
-        str: []const u8,
-        font_type: FontType,
-        font_size: f32,
-    ) ![]const Font.Quad {
+    pub fn textQuads(self: *FontCache, str: []const u8, font_type: FontType, font_size: f32) ![]const Font.Quad {
         return (try self.buildText(str, font_type, font_size)).quads;
     }
 
@@ -1640,51 +1615,59 @@ pub const FontCache = struct {
         font_type: FontType,
         font_size: f32,
     ) !CacheValue {
+        prof.startZoneN("FontCache.buildText");
+        defer prof.stopZone();
         const entry = .{
             .str_hash = std.hash.Wyhash.hash(0, str),
             .font_type = font_type,
             .font_size = font_size,
         };
-        const gop = try self.quad_cache.getOrPut(entry);
+        const gop = self.quad_cache.getOrPut(entry) catch {
+            // bypass the cache when OOM instead of failing
+            return self.buildCacheData(str, font_type, font_size);
+        };
+        const cached_data = gop.value;
         if (!gop.found_existing) {
-            const font = self.getFont(font_type);
-            const quads = try font.buildTextAt(self.allocator, str, font_size, vec2{ 0, 0 });
-            var tight_rect = Rect{ .min = @splat(std.math.floatMax(f32)), .max = @splat(0) };
-            for (quads) |quad| {
-                tight_rect.min = @min(tight_rect.min, quad.points[0].pos);
-                tight_rect.max = @max(tight_rect.max, quad.points[2].pos);
-            }
-
-            var rect = tight_rect;
-            const metrics = font.getScaledMetrics(font_size);
-            rect.max[1] = @max(rect.max[1], metrics.ascent);
-            rect.min[1] = @min(rect.min[1], metrics.descent);
-            rect.min[0] = @min(rect.min[0], 0); // we start the cursor at 0
-
-            gop.value_ptr.quads = quads;
-            gop.value_ptr.rect = rect;
+            cached_data.* = try self.buildCacheData(str, font_type, font_size);
         }
-        gop.value_ptr.last_frame_touched = self.frame_idx;
-        return gop.value_ptr.*;
+        cached_data.last_frame_touched = self.frame_idx;
+        return cached_data.*;
+    }
+
+    fn buildCacheData(
+        self: *FontCache,
+        str: []const u8,
+        font_type: FontType,
+        font_size: f32,
+    ) !CacheValue {
+        prof.startZoneN("FontCache.buildCacheData");
+        defer prof.stopZone();
+        const font = self.getFont(font_type);
+        const quads = try font.buildTextAt(self.allocator, str, font_size, vec2{ 0, 0 });
+        var tight_rect = Rect{ .min = @splat(std.math.floatMax(f32)), .max = @splat(0) };
+        for (quads) |quad| {
+            tight_rect.min = @min(tight_rect.min, quad.points[0].pos);
+            tight_rect.max = @max(tight_rect.max, quad.points[2].pos);
+        }
+        var rect = tight_rect;
+        const metrics = font.getScaledMetrics(font_size);
+        rect.max[1] = @max(rect.max[1], metrics.ascent);
+        rect.min[1] = @min(rect.min[1], metrics.descent);
+        rect.min[0] = @min(rect.min[0], 0); // we start the cursor at 0
+
+        return .{ .quads = quads, .rect = rect, .last_frame_touched = self.frame_idx };
     }
 
     /// Remove all cache entries that haven't been touched for at least 2 frames.
     pub fn prune(self: *FontCache, frame_idx: usize) !void {
         self.frame_idx = frame_idx;
-        // removing items from the map while iterating would invalidate the iterator
-        // so we free the entry data but collect all the keys to free later
-        var stale_keys = std.ArrayList(CacheKey).init(self.allocator);
-        defer stale_keys.deinit();
-
         var cache_it = self.quad_cache.iterator();
-        while (cache_it.next()) |kv_pair| {
-            if (kv_pair.value_ptr.last_frame_touched + 1 < self.frame_idx) {
-                try stale_keys.append(kv_pair.key_ptr.*);
-                self.allocator.free(kv_pair.value_ptr.quads);
+        while (cache_it.next()) |entry| {
+            if (entry.value.last_frame_touched + 1 < self.frame_idx) {
+                self.allocator.free(entry.value.quads);
+                self.quad_cache.remove(entry.key.*);
             }
         }
-
-        for (stale_keys.items) |key| _ = self.quad_cache.remove(key);
     }
 };
 

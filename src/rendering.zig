@@ -11,6 +11,8 @@ const Font = @import("Font.zig");
 const gfx = @import("graphics.zig");
 const indexOfNthScalar = UI.indexOfNthScalar;
 
+const prof = &@import("root").prof;
+
 pub var hot_reload_shaders: bool = false;
 pub var hot_reload_frame_interval: usize = 10;
 
@@ -77,8 +79,8 @@ pub const ShaderInput = extern struct {
 };
 
 pub fn render(self: *UI) !void {
-    @import("root").prof.startZoneN("UI.render");
-    defer @import("root").prof.stopZoneN("UI.render");
+    prof.startZoneN("UI.render");
+    defer prof.stopZone();
 
     const arena = self.build_arena.allocator();
     var estimated_rect_count = self.node_table.count() * 2;
