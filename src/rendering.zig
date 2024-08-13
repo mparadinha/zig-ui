@@ -53,6 +53,27 @@ pub const ShaderInput = extern struct {
         };
         return rect;
     }
+
+    /// A, single color, 1px border rect, for debugging
+    pub fn dbg(min: vec2, max: vec2, color: vec4) ShaderInput {
+        const rect align(32) = ShaderInput{
+            .btm_left_pos = min,
+            .top_right_pos = max,
+            .btm_left_uv = vec2{ 0, 0 },
+            .top_right_uv = vec2{ 0, 0 },
+            .top_left_color = color,
+            .btm_left_color = color,
+            .top_right_color = color,
+            .btm_right_color = color,
+            .corner_radii = [4]f32{ 0, 0, 0, 0 },
+            .edge_softness = 1,
+            .border_thickness = [4]f32{ 1, 1, 1, 1 },
+            .clip_rect_min = vec2{ 0, 0 },
+            .clip_rect_max = @as(vec2, @splat(std.math.floatMax(f32))),
+            .which_font = 0,
+        };
+        return rect;
+    }
 };
 
 pub fn render(self: *UI) !void {
@@ -157,12 +178,7 @@ pub fn render(self: *UI) !void {
     self.generic_shader.set("screen_size", self.screen_size);
     inline for (@typeInfo(FontType).Enum.fields) |field| {
         self.generic_shader.set(field.name ++ "_atlas", @as(i32, field.value));
-        const font = switch (@as(FontType, @enumFromInt(field.value))) {
-            .text => self.font,
-            .text_bold => self.font_bold,
-            .text_italic => self.font_italic,
-            .icon => self.icon_font,
-        };
+        const font = self.font_cache.getFont(@enumFromInt(field.value));
         font.texture.bind(field.value);
     }
     gl.bindVertexArray(inputs_vao);
@@ -170,7 +186,7 @@ pub fn render(self: *UI) !void {
 }
 
 fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), root: *Node) !void {
-    var node_iterator = DepthFirstNodeIterator{ .cur_node = root };
+    var node_iterator = RenderOrderNodeIterator{ .cur_node = root };
     while (node_iterator.next()) |node| {
         try addShaderInputsForNode(self, shader_inputs, node);
     }
@@ -242,16 +258,11 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
     if (node.flags.draw_text) blk: {
         if (node.display_string.len == 0) break :blk;
 
-        const font = switch (node.font_type) {
-            .text => &self.font,
-            .text_bold => &self.font_bold,
-            .text_italic => &self.font_italic,
-            .icon => &self.icon_font,
-        };
+        const font = self.font_cache.getFont(node.font_type);
 
         var text_base = self.textPosFromNode(node);
         if (node.flags.draw_active_effects)
-            text_base[1] -= (self.textPadding(node)[1] / 2) * node.active_trans;
+            text_base[1] -= (node.inner_padding[1] / 2) * node.active_trans;
 
         const display_text = if (estimateLineCount(node, font.*) < 100)
             node.display_string
@@ -261,20 +272,53 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             break :text res.string;
         };
 
-        const arena = self.build_arena.allocator();
-        const quads = try font.buildQuads(arena, display_text, node.font_size);
-        // because no other allocations are done in the arena between alloc and free
-        // of this buffer we can actually recoupe the memory (which is great given
-        // that this buffer can become quite large
-        defer arena.free(quads);
-        const ellipsis_quads = try font.buildQuads(arena, "...", node.font_size);
-        defer arena.free(ellipsis_quads); // this buffer is tiny, but might as well free it since we can
+        const text_info = try self.font_cache.buildText(display_text, node.font_type, node.font_size);
+        const quads = text_info.quads;
+        const ellipsis_text_info = try self.font_cache.buildText("...", node.font_type, node.font_size);
+        const ellipsis_quads = ellipsis_text_info.quads;
 
-        const ellipsis_width = ellipsis_quads[2].points[2].pos[0];
-        const max_node_text_x = node.rect.max[0] - node.inner_padding[0];
-        const max_x_before_ellipsis = max_node_text_x - ellipsis_width;
-        const text_width = quads[quads.len - 1].points[2].pos[0];
-        const needs_truncation = (text_width > max_node_text_x) and !node.flags.disable_text_truncation;
+        const node_inner_rect = Rect{
+            .min = node.rect.min + node.inner_padding,
+            .max = node.rect.max - node.inner_padding,
+        };
+        const text_width = text_info.rect.size()[0];
+        const ellipsis_width = ellipsis_text_info.rect.size()[0];
+        const max_text_width = node_inner_rect.size()[0];
+        // here we give 0.5px of leeway to allow for floating precision shenanigans
+        // (and because overflowing by less than 0.5px is imperceptible anyway)
+        const needs_truncation = (text_width - max_text_width > 0.5) and !node.flags.disable_text_truncation;
+
+        const ellipsis_text_base = vec2{ node_inner_rect.max[0] - ellipsis_width, text_base[1] };
+
+        const show_dbg_rects = false;
+        if (show_dbg_rects) {
+            // std.debug.print("needs_truncation: {}\n", .{needs_truncation});
+            // std.debug.print("text_base: {d}\n", .{text_base});
+            // std.debug.print("ellipsis_text_base: {d}\n", .{ellipsis_text_base});
+            // std.debug.print("ellipsis_width: {d}\n", .{ellipsis_width});
+            // std.debug.print("node.parent.?.rect: {d}\n", .{node.parent.?.rect});
+            // std.debug.print("node.parent.?.rect.size(): {d}\n", .{node.parent.?.rect.size()});
+            // std.debug.print("text_info.rect: {d}\n", .{text_info.rect});
+            // std.debug.print("text_info.rect.size(): {d}\n", .{text_info.rect.size()});
+            // std.debug.print("node.rect: {d}\n", .{node.rect});
+            // std.debug.print("node.rect.size(): {d}\n", .{node.rect.size()});
+            // std.debug.print("node_inner_rect: {d}\n", .{node_inner_rect});
+            // std.debug.print("node_inner_rect.size(): {d}\n", .{node_inner_rect.size()});
+            // std.debug.print("ellipsis_text_info.rect: {d}\n", .{ellipsis_text_info.rect});
+            // std.debug.print("ellipsis_text_info.rect.size(): {d}\n", .{ellipsis_text_info.rect.size()});
+            try shader_inputs.append(ShaderInput.dbg(
+                ellipsis_text_base + ellipsis_text_info.rect.min,
+                ellipsis_text_base + ellipsis_text_info.rect.max,
+                vec4{ 1, 1, 0, 1 },
+            ));
+            try shader_inputs.append(ShaderInput.dbg(node.rect.min, node.rect.max, vec4{ 0, 1, 0, 1 }));
+            try shader_inputs.append(ShaderInput.dbg(node_inner_rect.min, node_inner_rect.max, vec4{ 0.3, 0, 1, 1 }));
+            try shader_inputs.append(ShaderInput.dbg(
+                text_base + text_info.rect.min,
+                text_base + text_info.rect.max,
+                vec4{ 1, 0, 0, 1 },
+            ));
+        }
 
         var base_text_rect = base_rect;
         base_text_rect.top_left_color = node.text_color;
@@ -293,7 +337,8 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             rect.top_right_uv = quad.points[2].uv;
 
             // check if text truncation is needed
-            if (needs_truncation and rect.top_right_pos[0] > max_x_before_ellipsis) {
+            const quad_overflows = rect.top_right_pos[0] - ellipsis_text_base[0] > 1;
+            if (needs_truncation and quad_overflows) {
                 // drawing this last clipped char looks weird
                 // // draw this last character, but clip it to allow for ellipsis without overlaps
                 // rect.clip_rect_max[0] = max_x_before_ellipsis;
@@ -301,29 +346,34 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
 
                 // draw ellpsis and ignore the rest of the characters
                 // const ell_text_base = vec2{ max_x_before_ellipsis, text_base[1] };
-                const ell_text_base = vec2{ rect.btm_left_pos[0], text_base[1] };
                 for (ellipsis_quads) |ell_quad| {
                     rect = base_text_rect;
-                    rect.btm_left_pos = ell_text_base + ell_quad.points[0].pos;
-                    rect.top_right_pos = ell_text_base + ell_quad.points[2].pos;
+                    rect.btm_left_pos = ellipsis_text_base + ell_quad.points[0].pos;
+                    rect.top_right_pos = ellipsis_text_base + ell_quad.points[2].pos;
                     rect.btm_left_uv = ell_quad.points[0].uv;
                     rect.top_right_uv = ell_quad.points[2].uv;
                     try shader_inputs.append(rect);
+                    if (show_dbg_rects) {
+                        try shader_inputs.append(ShaderInput.dbg(rect.btm_left_pos, rect.top_right_pos, vec4{ 0, 1, 1, 1 }));
+                    }
                 }
                 break;
-            } else {
-                try shader_inputs.append(rect);
+            }
+
+            try shader_inputs.append(rect);
+            if (show_dbg_rects) {
+                try shader_inputs.append(ShaderInput.dbg(rect.btm_left_pos, rect.top_right_pos, vec4{ 0, 1, 1, 1 }));
             }
         }
     }
 }
 
-pub const DepthFirstNodeIterator = struct {
+pub const RenderOrderNodeIterator = struct {
     cur_node: *Node,
     first_iteration: bool = true,
     parent_level: usize = 0, // how many times have we gone down the hierarchy
 
-    pub fn next(self: *DepthFirstNodeIterator) ?*Node {
+    pub fn next(self: *RenderOrderNodeIterator) ?*Node {
         if (self.first_iteration) {
             self.first_iteration = false;
             return self.cur_node;
@@ -356,16 +406,10 @@ fn largeInputOptimizationVisiblePartOfText(self: *UI, node: *Node) struct {
     string: []const u8,
     offset: f32,
 } {
-    const font: *Font = switch (node.font_type) {
-        .text => &self.font,
-        .text_bold => &self.font_bold,
-        .text_italic => &self.font_italic,
-        .icon => &self.icon_font,
-    };
+    const font = self.font_cache.getFont(node.font_type);
     const line_size = font.getScaledMetrics(node.font_size).line_advance;
     const text_size = node.text_rect.size();
     const num_lines: usize = @intFromFloat(@ceil(text_size[1] / line_size));
-    // const padding = self.textPadding(node);
 
     // const top_of_text = node.rect.max[1] - padding[1];
     const top_of_text = node.rect.max[1];

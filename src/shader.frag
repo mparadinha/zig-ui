@@ -27,9 +27,9 @@ in GS_Out {
 
 uniform vec2 screen_size;
 // TODO: merge all these font/icon textures into a single atlas
-uniform sampler2D text_atlas;
-uniform sampler2D text_bold_atlas;
-uniform sampler2D text_italic_atlas;
+uniform sampler2D regular_atlas;
+uniform sampler2D bold_atlas;
+uniform sampler2D italic_atlas;
 uniform sampler2D icon_atlas;
 
 out vec4 FragColor;
@@ -136,9 +136,9 @@ void main() {
 
     float tex_alpha = 1;
     switch (fs_in.which_font) {
-        case 0u: tex_alpha = texture(text_atlas, fs_in.uv).r; break;
-        case 1u: tex_alpha = texture(text_bold_atlas, fs_in.uv).r; break;
-        case 2u: tex_alpha = texture(text_italic_atlas, fs_in.uv).r; break;
+        case 0u: tex_alpha = texture(regular_atlas, fs_in.uv).r; break;
+        case 1u: tex_alpha = texture(bold_atlas, fs_in.uv).r; break;
+        case 2u: tex_alpha = texture(italic_atlas, fs_in.uv).r; break;
         case 3u: tex_alpha = texture(icon_atlas, fs_in.uv).r; break;
     }
     if (fs_in.uv != vec2(0, 0) && inside_rect_pct != 0) color.a = tex_alpha;

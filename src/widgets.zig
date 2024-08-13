@@ -9,6 +9,7 @@ const vec4 = zig_ui.vec4;
 const glfw = zig_ui.glfw;
 const UI = @import("UI.zig");
 const Node = UI.Node;
+const Flags = UI.Flags;
 const Signal = UI.Signal;
 const Rect = UI.Rect;
 const Size = UI.Size;
@@ -53,12 +54,13 @@ pub fn box(ui: *UI, rect: UI.Rect, init_args: anytype) void {
     node.rel_pos = UI.RelativePlacement.simple(rect.min);
 }
 
+pub const label_flags = Flags{
+    .no_id = true,
+    .ignore_hash_sep = true,
+    .draw_text = true,
+};
 pub fn label(ui: *UI, str: []const u8) void {
-    _ = ui.addNode(.{
-        .no_id = true,
-        .ignore_hash_sep = true,
-        .draw_text = true,
-    }, str, .{});
+    _ = ui.addNode(label_flags, str, .{});
 }
 
 pub fn labelBox(ui: *UI, str: []const u8) void {
@@ -102,15 +104,16 @@ pub fn textBox(ui: *UI, str: []const u8) Signal {
     return node.signal;
 }
 
+pub const button_flags = Flags{
+    .clickable = true,
+    .draw_text = true,
+    .draw_border = true,
+    .draw_background = true,
+    .draw_hot_effects = true,
+    .draw_active_effects = true,
+};
 pub fn button(ui: *UI, str: []const u8) Signal {
-    const node = ui.addNode(.{
-        .clickable = true,
-        .draw_text = true,
-        .draw_border = true,
-        .draw_background = true,
-        .draw_hot_effects = true,
-        .draw_active_effects = true,
-    }, str, .{
+    const node = ui.addNode(button_flags, str, .{
         .cursor_type = .pointing_hand,
     });
     return node.signal;
@@ -256,8 +259,8 @@ pub fn checkBox(ui: *UI, str: []const u8, value: *bool) Signal {
     }, "{s}_parent", .{hash_str}, p_size, .x);
     defer ui.popParentAssert(p);
 
-    const box_icon = if (value.*) Icons.ok else " ";
-    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ box_icon, hash_str });
+    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ Icons.ok, hash_str });
+    if (!value.*) box_signal.node.?.flags.draw_text = false;
     if (box_signal.clicked) value.* = !value.*;
 
     ui.label(disp_str);
@@ -443,7 +446,7 @@ pub fn enumTabList(ui: *UI, comptime T: type, selected_tab: *T) struct {
 /// pushes a new node as parent that is meant only for layout purposes
 pub fn pushLayoutParent(
     ui: *UI,
-    flags: UI.Flags,
+    flags: Flags,
     hash: []const u8,
     size: [2]Size,
     layout_axis: Axis,
@@ -559,7 +562,7 @@ pub const ScrollViewOptions = struct {};
 
 pub fn startScrollView(
     ui: *UI,
-    flags: UI.Flags,
+    flags: Flags,
     name: []const u8,
     init_args: anytype,
 ) void {
@@ -648,7 +651,7 @@ pub fn scrollbar(
     // get the size of the arrow buttons so we can scale them down to fit
     // nicely into the bar
     const font_size = ui.topStyle().font_size;
-    const arrow_icon_rect = ui.icon_font.textRect(UI.Icons.up_open, font_size) catch @panic("TODO");
+    const arrow_icon_rect = ui.font_cache.textRect(UI.Icons.up_open, .icon, font_size) catch @panic("TODO");
     const arrow_icon_size = (arrow_icon_rect.max - arrow_icon_rect.min)[off_axis_idx];
     const off_axis_size = scroll_region_p.rect.size()[off_axis_idx];
     const scaled_icon_font_size = font_size / (arrow_icon_size / off_axis_size);
@@ -827,7 +830,7 @@ pub fn textInputRaw(
         .floating_x = true,
         .ignore_hash_sep = true,
     }, display_str, .{
-        .font_type = if (show_default_str) FontType.text_italic else FontType.text,
+        .font_type = if (show_default_str) FontType.italic else FontType.regular,
     });
     // slightly darken text color when showing the default text
     if (show_default_str) {
@@ -835,18 +838,19 @@ pub fn textInputRaw(
     }
 
     const font_pixel_size = ui.topStyle().font_size;
-    const text_padd = ui.textPadding(text_node);
+    const text_padd = ui.text_padding;
 
-    const rect_before_cursor = try ui.font.textRect(buffer[0..input.cursor], font_pixel_size);
-    const rect_before_mark = try ui.font.textRect(buffer[0..input.mark], font_pixel_size);
+    const rect_before_cursor = try ui.font_cache.textRect(buffer[0..input.cursor], .regular, font_pixel_size);
+    const rect_before_mark = try ui.font_cache.textRect(buffer[0..input.mark], .regular, font_pixel_size);
 
-    const cursor_height = ui.font.getScaledMetrics(font_pixel_size).line_advance - text_padd[1];
+    const font_metrics = ui.font_cache.getFont(.regular).getScaledMetrics(font_pixel_size);
+    const cursor_height = font_metrics.line_advance - text_padd[1];
     const cursor_rel_pos = vec2{ rect_before_cursor.max[0], 0 } + text_padd;
     const selection_size = @abs(rect_before_mark.max[0] - rect_before_cursor.max[0]);
     const selection_start = @min(rect_before_mark.max[0], rect_before_cursor.max[0]);
     const selection_rel_pos = vec2{ selection_start, 0 } + text_padd;
 
-    const filled_rect_flags = UI.Flags{
+    const filled_rect_flags = Flags{
         .no_id = true,
         .draw_background = true,
         .floating_x = true,
@@ -896,7 +900,7 @@ pub fn textInputRaw(
         while (idx < buf_len.*) {
             const codepoint_len = try std.unicode.utf8ByteSequenceLength(display_str[idx]);
             const partial_text_buf = display_str[0 .. idx + codepoint_len];
-            const partial_rect = try ui.font.textRect(partial_text_buf, font_pixel_size);
+            const partial_rect = try ui.font_cache.textRect(partial_text_buf, .regular, font_pixel_size);
             if (partial_rect.max[0] + text_padd[0] > sig.mouse_pos[0]) break;
             idx += codepoint_len;
         }
@@ -1216,7 +1220,7 @@ pub fn tabButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, selected: bo
     return ui.tabButton(str, selected, opts);
 }
 
-pub fn pushLayoutParentF(ui: *UI, flags: UI.Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
+pub fn pushLayoutParentF(ui: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
     const str = ui.fmtTmpString(fmt, args);
     return ui.pushLayoutParent(flags, str, size, layout_axis);
 }

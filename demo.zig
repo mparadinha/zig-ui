@@ -16,8 +16,13 @@ var max_graph_y: f32 = fps_value * 1.5;
 var auto_size_graph: bool = true;
 var zone_table_include_children: bool = true;
 
+var gpa = std.heap.GeneralPurposeAllocator(.{
+    // turning this on enables tracking of total allocation requests; the default
+    // mem. limit is maxInt(usize), so we don't have to worry about that
+    .enable_memory_limit = true,
+}){};
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(!gpa.detectLeaks());
     const allocator = gpa.allocator();
 
@@ -50,6 +55,10 @@ pub fn main() !void {
         prof.startZoneN("main loop");
         defer prof.stopZoneN("main loop");
 
+        var frame_arena_allocator = std.heap.ArenaAllocator.init(allocator);
+        defer frame_arena_allocator.deinit();
+        const frame_arena = frame_arena_allocator.allocator();
+
         glfw.swapInterval(if (demo.unlock_framerate) 0 else 1);
 
         // grab all window/input information we need for this frame
@@ -81,6 +90,34 @@ pub fn main() !void {
         if (demo.show_zoom) try renderZoomDisplay(allocator, demo, fbsize);
         if (show_profiler_graph) try renderProfilerGraph(allocator, prof, profiler_graph_rect, fbsize);
 
+        // @debug: print info about Node directly under cursor
+        if (window.event_queue.searchAndRemove(.KeyDown, .{
+            .mods = .{ .control = true, .shift = true },
+            .key = .q,
+        })) {
+            var node_roots = std.ArrayList(*UI.Node).init(frame_arena);
+            { // order copied from `UI.startBuild`
+                if (ui.tooltip_root) |node| try node_roots.append(node);
+                if (ui.ctx_menu_root) |node| try node_roots.append(node);
+                var windows_done: usize = 0;
+                while (windows_done < ui.window_roots.items.len) : (windows_done += 1) {
+                    const node = ui.window_roots.items[ui.window_roots.items.len - 1 - windows_done];
+                    try node_roots.append(node);
+                }
+                if (ui.root) |node| try node_roots.append(node);
+            }
+            const node = blk: {
+                for (node_roots.items) |root| {
+                    var node_it = UI.InputOrderNodeIterator.init(root);
+                    while (node_it.next()) |node| {
+                        if (node.rect.contains(mouse_pos)) break :blk node;
+                    }
+                }
+                unreachable;
+            };
+            UI.printNode(node);
+        }
+
         window.update();
     }
 }
@@ -105,7 +142,8 @@ const DemoState = struct {
     zoom_region: UI.Rect = UI.Rect{ .min = vec2{ 0, 0 }, .max = vec2{ 0, 0 } },
 
     // perf. testing stuff
-    dummy_labels: usize = 350,
+    dummy_labels: usize = 1000,
+    auto_scale_dummy_labels: bool = false,
 
     show_debug_stats: bool = true,
     show_zoom: bool = false,
@@ -344,6 +382,24 @@ fn showDemo(
         ui.labelF("build_arena capacity: {:.2}", .{
             std.fmt.fmtIntSizeBin(ui.build_arena.queryCapacity()),
         });
+        ui.labelF("gpa.total_requested_bytes: {:.2}", .{
+            std.fmt.fmtIntSizeBin(gpa.total_requested_bytes),
+        });
+        {
+            var statm_file = try std.fs.openFileAbsolute("/proc/self/statm", .{});
+            defer statm_file.close();
+            var buf: [512]u8 = undefined;
+            _ = try statm_file.readAll(&buf);
+            var it = std.mem.tokenizeAny(u8, &buf, " \t\n");
+            const total_page_count = try std.fmt.parseUnsigned(usize, it.next().?, 0);
+            const resident_page_count = try std.fmt.parseUnsigned(usize, it.next().?, 0);
+            const shared_page_count = try std.fmt.parseUnsigned(usize, it.next().?, 0);
+
+            const page_size = 4 * 1024;
+            ui.labelF("total mem.: {:.2}", .{std.fmt.fmtIntSizeBin(total_page_count * page_size)});
+            ui.labelF("resident mem.: {:.2}", .{std.fmt.fmtIntSizeBin(resident_page_count * page_size)});
+            ui.labelF("shared mem.: {:.2}", .{std.fmt.fmtIntSizeBin(shared_page_count * page_size)});
+        }
     }
 }
 
@@ -356,7 +412,7 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
         .alignment = .center,
     };
     const section_title_style = .{
-        .font_type = .text_bold,
+        .font_type = .bold,
         .alignment = .center,
     };
 
@@ -406,7 +462,7 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
             UI.Size.percent(1, 0), UI.Size.children(1),
         }, .x);
         defer ui.popParentAssert(sides);
-        for ([2]bool{ false, true }) |disable_truncation| {
+        for ([2]bool{ true, false }) |disable_truncation| {
             const p = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{
                 UI.Size.percent(0.5, 0), UI.Size.children(1),
             }, .y);
@@ -565,14 +621,26 @@ fn showDemoTabConfig(ui: *UI, state: *DemoState) void {
 }
 
 fn showDemoTabPerfTesting(ui: *UI, state: *DemoState) void {
-    {
+    _ = ui.checkBox("Scale dummy label count to target 60fps", &state.auto_scale_dummy_labels);
+    if (state.auto_scale_dummy_labels) {
+        if (prof.frame_idx > 0) {
+            const dt_diff = prof.frame_times[prof.frame_idx - 1] - fps_value;
+            if (dt_diff > 0.001) state.dummy_labels -= 1;
+            if (dt_diff < -0.001) state.dummy_labels += 1;
+        }
+    } else {
         ui.startLine();
         defer ui.endLine();
         ui.labelF("{: >4}", .{state.dummy_labels});
         const slider_size = [2]UI.Size{ UI.Size.em(50, 1), UI.Size.em(1, 1) };
         ui.slider(usize, "dummy_label_slider", slider_size, &state.dummy_labels, 0, 5000);
     }
-    for (0..state.dummy_labels) |idx| ui.labelF("label #{}", .{idx});
+    if (ui.toggleButton("Static labels", true).toggled) {
+        for (0..state.dummy_labels) |idx| ui.labelF("label #{}", .{idx});
+    }
+    if (ui.toggleButton("Dynamic labels", false).toggled) {
+        for (0..state.dummy_labels) |idx| ui.labelF("label #{}: frame_idx+label_idx={}", .{ idx, idx + ui.frame_idx });
+    }
 }
 
 fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void {
@@ -797,7 +865,7 @@ pub const Zone = struct {
 };
 
 fn reduceSlice(comptime T: type, comptime op: std.builtin.ReduceOp, values: []const T) T {
-    prof.startZoneN("reduceSlice(" ++ @typeName(T) ++ ", ." ++ @tagName(op) ++ ", ...)");
+    prof.startZoneN("reduceSlice(" ++ @typeName(T) ++ ", ." ++ @tagName(op) ++ ")");
     defer prof.stopZone();
 
     const Len = std.simd.suggestVectorLength(T) orelse 1;
@@ -837,19 +905,35 @@ fn helperShowNodeTableHist(ui: *UI) void {
 
     ui.pushStyle(.{ .font_size = 14 });
     defer _ = ui.popStyle();
-    ui.startLine();
-    defer ui.endLine();
+    _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) }, .x);
+    defer _ = ui.popParent();
     const max_bar_height = 100; // in px
     var max_count: usize = 0;
     for (ui.node_table.buckets) |bucket| {
         max_count = @max(max_count, bucket.count());
     }
     for (ui.node_table.buckets, 0..) |bucket, idx| {
-        _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.em(1.1, 1), UI.Size.children(1) }, .y);
+        _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) }, .y);
         defer _ = ui.popParent();
-        ui.labelBoxF("{: >2}", .{idx});
+        _ = ui.addNodeF(.{
+            .draw_text = true,
+            .draw_background = true,
+            .draw_border = true,
+            .no_id = true,
+            .disable_text_truncation = true,
+        }, "{:0>2}", .{idx}, .{
+            .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) },
+            .text_align = .center,
+        });
         const count = bucket.count();
-        ui.labelF("{:0>2}", .{count});
+        _ = ui.addNodeF(.{
+            .draw_text = true,
+            .no_id = true,
+            .disable_text_truncation = true,
+        }, "{:0>2}", .{count}, .{
+            .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) },
+            .text_align = .center,
+        });
         const bar_size = max_bar_height * @as(f32, @floatFromInt(count)) / @as(f32, @floatFromInt(max_count));
         _ = ui.addNode(.{
             .draw_border = true,
@@ -865,26 +949,6 @@ fn helperShowZoneTable(ui: *UI) void {
     _ = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.children2(1, 1), .y);
     defer _ = ui.popParent();
 
-    const columns: []const struct {
-        name: []const u8,
-        size: f32, // in `em`
-    } = &.{
-        .{ .name = "zone", .size = 17 },
-        .{ .name = "% of frame", .size = 5 },
-        .{ .name = "ms/frame", .size = 5 },
-        .{ .name = "calls/frame", .size = 6 },
-        .{ .name = "ms/call", .size = 5 },
-    };
-    // table header
-    {
-        ui.startLine();
-        defer ui.endLine();
-        const label_flags = UI.Flags{ .draw_text = true, .draw_border = true, .no_id = true };
-        for (columns) |col| {
-            const size = [2]UI.Size{ UI.Size.em(col.size, 1), UI.Size.text(1) };
-            _ = ui.addNode(label_flags, col.name, .{ .size = size });
-        }
-    }
     var zone_entries = blk: {
         const ZoneEntry = struct {
             key: []const u8,
@@ -919,6 +983,27 @@ fn helperShowZoneTable(ui: *UI) void {
         break :blk array;
     };
     const total_frame_time = reduceSlice(f32, .Add, &prof.frame_times);
+
+    const columns: []const struct {
+        name: []const u8,
+        size: f32, // in `em`
+    } = &.{
+        .{ .name = "zone", .size = 15 },
+        .{ .name = "% of frame", .size = 5 },
+        .{ .name = "ms/frame", .size = 5 },
+        .{ .name = "calls/frame", .size = 6 },
+        .{ .name = "ms/call", .size = 5 },
+    };
+    // table header
+    {
+        ui.startLine();
+        defer ui.endLine();
+        const label_flags = UI.Flags{ .draw_text = true, .draw_border = true, .no_id = true };
+        for (columns) |col| {
+            const size = [2]UI.Size{ UI.Size.em(col.size, 1), UI.Size.text(1) };
+            _ = ui.addNode(label_flags, col.name, .{ .size = size });
+        }
+    }
     for (zone_entries.slice()) |entry| {
         const name = entry.key;
         const zone = entry.zone;
@@ -947,7 +1032,7 @@ fn helperShowZoneTable(ui: *UI) void {
             ui.pushParent(ui.addNode(col_flags, "", col_args(&col_idx, columns)));
             defer _ = ui.popParent();
 
-            ui.spacer(.x, UI.Size.em(0.1, 1));
+            ui.spacer(.x, UI.Size.em(0.2, 1));
             // TODO: turn this into a button that opens a color picker
             _ = ui.addNode(.{
                 .draw_background = true,
@@ -961,19 +1046,19 @@ fn helperShowZoneTable(ui: *UI) void {
             ui.spacer(.x, UI.Size.em(0.1, 1));
             if (ui.addNodeF(.{
                 .clickable = true,
-                .draw_background = zone.display,
+                .draw_text = zone.display,
                 .draw_border = true,
+                .draw_background = zone.display,
                 .draw_hot_effects = true,
-                .draw_text = true,
                 .floating_y = true,
-            }, "{s}###{s}_zone_toggle", .{ if (zone.display) UI.Icons.ok else " ", name }, .{
+            }, "{s}###{s}_zone_toggle", .{ UI.Icons.ok, name }, .{
                 .cursor_type = .pointing_hand,
                 .font_type = .icon,
                 .font_size = ui.topStyle().font_size * 0.75,
                 .rel_pos = UI.RelativePlacement.match(.center),
             }).signal.clicked) zone.display = !zone.display;
             ui.spacer(.x, UI.Size.em(0.1, 1));
-            ui.label(name);
+            _ = ui.addNode(UI.label_flags, name, .{ .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) } });
         }
         // '% of frame' column
         {

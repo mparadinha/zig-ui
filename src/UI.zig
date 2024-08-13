@@ -27,10 +27,7 @@ const Cursor = Window.Cursor;
 
 allocator: Allocator,
 generic_shader: gfx.Shader,
-font: Font,
-font_bold: Font,
-font_italic: Font,
-icon_font: Font,
+font_cache: FontCache,
 build_arena: std.heap.ArenaAllocator,
 node_table: NodeTable,
 prng: PRNG,
@@ -70,6 +67,8 @@ hot_node_key: ?NodeKey,
 active_node_key: ?NodeKey,
 focused_node_key: ?NodeKey,
 
+text_padding: vec2,
+
 const NodeKey = NodeTable.Hash;
 
 pub const FontOptions = struct {
@@ -107,10 +106,7 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
             .geometry = @embedFile("shader.geom"),
             .fragment = @embedFile("shader.frag"),
         }) catch unreachable,
-        .font = try Font.fromTTF(allocator, font_opts.font_path),
-        .font_bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
-        .font_italic = try Font.fromTTF(allocator, font_opts.italic_font_path),
-        .icon_font = try Font.fromTTF(allocator, font_opts.icon_font_path),
+        .font_cache = try FontCache.init(allocator, font_opts),
         .build_arena = std.heap.ArenaAllocator.init(allocator),
         .node_table = NodeTable.init(allocator),
         .prng = .{ .state = 0 },
@@ -139,6 +135,8 @@ pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
         .hot_node_key = null,
         .active_node_key = null,
         .focused_node_key = null,
+
+        .text_padding = vec2{ 4, 4 },
     };
 }
 
@@ -147,10 +145,7 @@ pub fn deinit(self: *UI) void {
     self.parent_stack.deinit();
     self.node_table.deinit();
     self.build_arena.deinit();
-    self.font.deinit();
-    self.font_bold.deinit();
-    self.font_italic.deinit();
-    self.icon_font.deinit();
+    self.font_cache.deinit();
     self.generic_shader.deinit();
     self.window_roots.deinit();
     self.node_keys_this_frame.deinit();
@@ -186,6 +181,18 @@ pub const Flags = packed struct {
             self.toggleable or
             self.scroll_children_x or
             self.scroll_children_y;
+    }
+
+    const Int = @typeInfo(@This()).Struct.backing_integer.?;
+
+    pub fn @"and"(self: Flags, other: Flags) Flags {
+        return @bitCast(@as(Int, @bitCast(self)) & @as(Int, @bitCast(other)));
+    }
+    pub fn @"or"(self: Flags, other: Flags) Flags {
+        return @bitCast(@as(Int, @bitCast(self)) | @as(Int, @bitCast(other)));
+    }
+    pub fn not(self: Flags) Flags {
+        return @bitCast(~@as(Int, @bitCast(self)));
     }
 };
 
@@ -261,7 +268,7 @@ pub const CustomDrawFn = *const fn (
 
 pub const Axis = enum { x, y };
 pub const Alignment = enum { start, center, end };
-pub const FontType = enum { text, text_bold, text_italic, icon }; // update `shader.frag` whenever this changes
+pub const FontType = enum { regular, bold, italic, icon }; // update `shader.frag` whenever this changes
 pub const TextAlign = enum { left, center, right };
 
 pub const Style = struct {
@@ -275,7 +282,7 @@ pub const Style = struct {
     layout_axis: Axis = .y,
     alignment: Alignment = .start,
     cursor_type: Cursor = .arrow,
-    font_type: FontType = .text,
+    font_type: FontType = .regular,
     font_size: f32 = 18,
     text_align: TextAlign = .left,
     custom_draw_fn: ?CustomDrawFn = null,
@@ -423,8 +430,8 @@ pub const Rect = struct {
         return .{ .min = highest_min, .max = lowest_max };
     }
 
-    pub fn format(v: Rect, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{{ .min={d:.2}, .max={d:.2} }}", .{ v.min, v.max });
+    pub fn format(v: Rect, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{{ .min={" ++ fmt ++ "}, .max={" ++ fmt ++ "} }}", .{ v.min, v.max });
     }
 };
 
@@ -667,7 +674,7 @@ pub fn addNodeRawStrings(
         const field_name = field_type_info.name;
         @field(node, field_name) = @field(style, field_name);
     }
-    node.inner_padding = if (node.flags.draw_text) self.textPadding(node) else vec2{ 0, 0 };
+    node.inner_padding = if (node.flags.draw_text) self.text_padding else vec2{ 0, 0 };
 
     node.first_time = !lookup_result.found_existing;
 
@@ -780,7 +787,11 @@ pub fn startBuild(
     // of another, the top one should get the inputs, no the bottom one)
     if (self.tooltip_root) |node| try self.computeSignalsForTree(node);
     if (self.ctx_menu_root) |node| try self.computeSignalsForTree(node);
-    for (self.window_roots.items) |node| try self.computeSignalsForTree(node);
+    var windows_done: usize = 0;
+    while (windows_done < self.window_roots.items.len) : (windows_done += 1) {
+        const node = self.window_roots.items[self.window_roots.items.len - 1 - windows_done];
+        try self.computeSignalsForTree(node);
+    }
     if (self.root) |node| try self.computeSignalsForTree(node);
 
     // clear out the whole arena
@@ -789,9 +800,11 @@ pub fn startBuild(
     self.node_keys_this_frame.clearRetainingCapacity();
 
     // the PRNG is only used for `no_id` hash generation.
-    // by reseting it every frame we still get 'random' hashes in the same
-    // frame, while maintaining *some* inter-frame consistency
+    // by reseting it every frame we still get 'random' hashes within the same frame,
+    // while maintaining *some* inter-frame consistency which helps with caching
     self.prng.state = 0;
+
+    try self.font_cache.prune(self.frame_idx);
 
     const screen_size = vec2{ @as(f32, @floatFromInt(screen_w)), @as(f32, @floatFromInt(screen_h)) };
     self.screen_size = screen_size;
@@ -1029,13 +1042,8 @@ pub fn computeSignalFromNode(self: *UI, node: *Node) !Signal {
     return signal;
 }
 
-pub fn textPadding(_: *UI, node: *Node) vec2 {
-    return @splat(node.font_size * 0.2);
-}
-
 /// calculate the origin of a node's text box in absolute coordinates
-pub fn textPosFromNode(self: *UI, node: *Node) vec2 {
-    _ = self;
+pub fn textPosFromNode(_: *UI, node: *Node) vec2 {
     const node_size = node.rect.size();
     const text_rect = node.text_rect;
     const text_size = text_rect.size();
@@ -1060,34 +1068,29 @@ fn calcTextRect(self: *UI, node: *Node, string: []const u8) !Rect {
     prof.startZoneN("UI.calcTextRect");
     defer prof.stopZoneN("UI.calcTextRect");
 
-    const font: *Font = switch (node.font_type) {
-        .text => &self.font,
-        .text_bold => &self.font_bold,
-        .text_italic => &self.font_italic,
-        .icon => &self.icon_font,
-    };
+    const font = self.font_cache.getFont(node.font_type);
 
     const text_line_info = findTextLineInfo(string);
     const num_lines = text_line_info.line_count;
     const longest_line = text_line_info.longest_line;
     if (num_lines <= 1) {
-        const font_rect = try font.textRect(string, node.font_size);
+        const font_rect = try self.font_cache.textRect(string, node.font_type, node.font_size);
         return .{ .min = font_rect.min, .max = font_rect.max };
     }
 
     const longest_line_width = blk: {
-        const rect = try font.textRect(longest_line, node.font_size);
+        const rect = try self.font_cache.textRect(longest_line, node.font_type, node.font_size);
         break :blk rect.max[0] - rect.min[0];
     };
 
     const line_size = font.getScaledMetrics(node.font_size).line_advance;
 
     const first_line = string[0 .. indexOfNthScalar(string, '\n', 1) orelse string.len];
-    const first_line_rect = try font.textRect(first_line, node.font_size);
+    const first_line_rect = try self.font_cache.textRect(first_line, node.font_type, node.font_size);
 
     const last_newline = std.mem.lastIndexOfScalar(u8, string, '\n');
     const last_line = string[if (last_newline) |idx| idx + 1 else 0..];
-    const last_line_rect = try font.textRect(last_line, node.font_size);
+    const last_line_rect = try self.font_cache.textRect(last_line, node.font_type, node.font_size);
 
     const first_to_last_baseline = line_size * @as(f32, @floatFromInt(num_lines - 1));
 
@@ -1543,6 +1546,148 @@ pub const NodeTable = struct {
     }
 };
 
+// TODO: besides having this cache we could also separate the font quad building
+// from font rasterization. when we are missing a cached raster char while building
+// the quads those would go into a 'raster queue' that would be taken care of in a
+// separate thread
+pub const FontCache = struct {
+    allocator: Allocator,
+    regular: Font,
+    bold: Font,
+    italic: Font,
+    icon: Font,
+    quad_cache: QuadCache,
+    frame_idx: usize,
+
+    pub const QuadCache = std.HashMap(CacheKey, CacheValue, struct {
+        /// Floats cannot use the 'auto hash' because floats values are not
+        /// guaranteed to have unique representations. For example, there's
+        /// multiple bit patterns for NaN, inf., +0 vs -0, etc.
+        /// This function will treats those as if they are distinct values.
+        /// Note that padding bytes in non-packed struct have no defined value,
+        /// which might also lead to incorrect cache-misses.
+        pub fn hash(_: @This(), key: CacheKey) u64 {
+            // on the inside we're all the same: just a bunch'a bytes
+            return std.hash_map.hashString(std.mem.asBytes(&key));
+        }
+        pub fn eql(_: @This(), a: CacheKey, b: CacheKey) bool {
+            return (a.str_hash == b.str_hash) and (a.font_type == b.font_type) and (a.font_size == b.font_size);
+        }
+    }, std.hash_map.default_max_load_percentage);
+    pub const CacheKey = struct {
+        str_hash: u64,
+        font_type: FontType,
+        font_size: f32,
+    };
+    pub const CacheValue = struct {
+        rect: Rect,
+        quads: []const Font.Quad, // owned by FontCache
+        last_frame_touched: usize,
+    };
+
+    pub fn init(allocator: Allocator, font_opts: FontOptions) !FontCache {
+        return .{
+            .allocator = allocator,
+            .regular = try Font.fromTTF(allocator, font_opts.font_path),
+            .bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
+            .italic = try Font.fromTTF(allocator, font_opts.italic_font_path),
+            .icon = try Font.fromTTF(allocator, font_opts.icon_font_path),
+            .quad_cache = QuadCache.init(allocator),
+            .frame_idx = 0,
+        };
+    }
+
+    pub fn deinit(self: *FontCache) void {
+        self.regular.deinit();
+        self.bold.deinit();
+        self.italic.deinit();
+        self.icon.deinit();
+        var cache_v_it = self.quad_cache.valueIterator();
+        while (cache_v_it.next()) |v| self.allocator.free(v.quads);
+        self.quad_cache.deinit();
+    }
+
+    pub fn getFont(self: *FontCache, font_type: FontType) *Font {
+        return switch (font_type) {
+            .regular => &self.regular,
+            .bold => &self.bold,
+            .italic => &self.italic,
+            .icon => &self.icon,
+        };
+    }
+
+    pub fn textRect(
+        self: *FontCache,
+        str: []const u8,
+        font_type: FontType,
+        font_size: f32,
+    ) !Rect {
+        return (try self.buildText(str, font_type, font_size)).rect;
+    }
+
+    pub fn textQuads(
+        self: *FontCache,
+        str: []const u8,
+        font_type: FontType,
+        font_size: f32,
+    ) ![]const Font.Quad {
+        return (try self.buildText(str, font_type, font_size)).quads;
+    }
+
+    pub fn buildText(
+        self: *FontCache,
+        str: []const u8,
+        font_type: FontType,
+        font_size: f32,
+    ) !CacheValue {
+        const entry = .{
+            .str_hash = std.hash.Wyhash.hash(0, str),
+            .font_type = font_type,
+            .font_size = font_size,
+        };
+        const gop = try self.quad_cache.getOrPut(entry);
+        if (!gop.found_existing) {
+            const font = self.getFont(font_type);
+            const quads = try font.buildTextAt(self.allocator, str, font_size, vec2{ 0, 0 });
+            var tight_rect = Rect{ .min = @splat(std.math.floatMax(f32)), .max = @splat(0) };
+            for (quads) |quad| {
+                tight_rect.min = @min(tight_rect.min, quad.points[0].pos);
+                tight_rect.max = @max(tight_rect.max, quad.points[2].pos);
+            }
+
+            var rect = tight_rect;
+            const metrics = font.getScaledMetrics(font_size);
+            rect.max[1] = @max(rect.max[1], metrics.ascent);
+            rect.min[1] = @min(rect.min[1], metrics.descent);
+            rect.min[0] = @min(rect.min[0], 0); // we start the cursor at 0
+
+            gop.value_ptr.quads = quads;
+            gop.value_ptr.rect = rect;
+        }
+        gop.value_ptr.last_frame_touched = self.frame_idx;
+        return gop.value_ptr.*;
+    }
+
+    /// Remove all cache entries that haven't been touched for at least 2 frames.
+    pub fn prune(self: *FontCache, frame_idx: usize) !void {
+        self.frame_idx = frame_idx;
+        // removing items from the map while iterating would invalidate the iterator
+        // so we free the entry data but collect all the keys to free later
+        var stale_keys = std.ArrayList(CacheKey).init(self.allocator);
+        defer stale_keys.deinit();
+
+        var cache_it = self.quad_cache.iterator();
+        while (cache_it.next()) |kv_pair| {
+            if (kv_pair.value_ptr.last_frame_touched + 1 < self.frame_idx) {
+                try stale_keys.append(kv_pair.key_ptr.*);
+                self.allocator.free(kv_pair.value_ptr.quads);
+            }
+        }
+
+        for (stale_keys.items) |key| _ = self.quad_cache.remove(key);
+    }
+};
+
 pub const PRNG = struct {
     state: u64,
 
@@ -1838,3 +1983,26 @@ pub const DebugView = struct {
         try self.ui.render();
     }
 };
+
+/// Pretty print a `Node`
+pub fn printNode(node: *const Node) void {
+    inline for (@typeInfo(Node).Struct.fields) |field| {
+        const value = @field(node, field.name);
+        switch (field.type) {
+            ?*UI.Node => std.debug.print("{s}: {?*}\n", .{ field.name, value }),
+            UI.Flags, UI.Signal => |SType| {
+                std.debug.print("{s}: {{\n", .{field.name});
+                inline for (@typeInfo(SType).Struct.fields) |s_field| {
+                    const s_value = @field(value, s_field.name);
+                    if (s_field.type == ?*UI.Node) {
+                        std.debug.print("  {s} = {?*}\n", .{ s_field.name, s_value });
+                    } else {
+                        std.debug.print("  {s} = {any}\n", .{ s_field.name, s_value });
+                    }
+                }
+                std.debug.print("}}\n", .{});
+            },
+            else => std.debug.print("{s}: {any}\n", .{ field.name, value }),
+        }
+    }
+}

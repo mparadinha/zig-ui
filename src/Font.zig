@@ -89,51 +89,28 @@ pub const Quad = extern struct {
     const Vertex = packed struct { pos: vec2, uv: vec2 };
 };
 
-/// caller owns returned memory
-pub fn buildQuads(self: *Font, allocator: Allocator, str: []const u8, pixel_size: f32) ![]Quad {
-    return self.buildQuadsAt(allocator, str, pixel_size, vec2{ 0, 0 });
-}
-
-/// caller owns returned memory
-pub fn buildQuadsAt(self: *Font, allocator: Allocator, str: []const u8, pixel_size: f32, start_pos: vec2) ![]Quad {
-    return self.buildTextAt(.quad, allocator, str, pixel_size, start_pos);
-}
-
 pub const Rect = struct {
     min: vec2,
     max: vec2,
 };
 
-pub fn textRect(self: *Font, str: []const u8, pixel_size: f32) !Rect {
-    return self.buildTextAt(.rect, undefined, str, pixel_size, vec2{ 0, 0 });
-}
-
-fn buildTextAt(
+/// Caller owns returned memory
+pub fn buildTextAt(
     self: *Font,
-    comptime mode: enum { rect, quad },
     allocator: Allocator,
     str: []const u8,
     pixel_size: f32,
     start_pos: vec2,
-) !switch (mode) {
-    .rect => Rect,
-    .quad => []Quad,
-} {
+) ![]Quad {
     const char_map = try self.getSizedCharMap(pixel_size);
     const metrics = char_map.metrics;
     const scale = char_map.scale;
 
-    var quads = switch (mode) {
-        .rect => @as(std.ArrayList(Quad), undefined),
-        .quad => try std.ArrayList(Quad).initCapacity(allocator, str.len),
-    };
+    var quads = try std.ArrayList(Quad).initCapacity(allocator, str.len);
 
-    var cursor = @as([2]f32, start_pos);
-    var max_x: f32 = 0;
+    var cursor = start_pos;
 
-    if (mode == .rect) {
-        std.debug.assert(utf8Validate(str));
-    }
+    std.debug.assert(utf8Validate(str));
     var utf8_iter = std.unicode.Utf8View.initUnchecked(str).iterator();
     while (utf8_iter.nextCodepoint()) |codepoint| {
         const next_codepoint: ?u21 = if (utf8_iter.i >= utf8_iter.bytes.len)
@@ -152,36 +129,26 @@ fn buildTextAt(
         // TODO: kerning
 
         const char_data = try self.getCharDataFromMap(char_map, codepoint);
-        if (mode == .quad) {
-            const pos_bl = char_data.pos_btm_left;
-            const pos_tr = char_data.pos_top_right;
-            const pos_br = vec2{ pos_tr[0], pos_bl[1] };
-            const pos_tl = vec2{ pos_bl[0], pos_tr[1] };
-            const uv_bl = char_data.uv_btm_left;
-            const uv_tr = char_data.uv_top_right;
-            const uv_br = vec2{ uv_tr[0], uv_bl[1] };
-            const uv_tl = vec2{ uv_bl[0], uv_tr[1] };
-            const quad = Quad{ .points = [4]Quad.Vertex{
-                .{ .pos = cursor + pos_bl, .uv = uv_bl },
-                .{ .pos = cursor + pos_br, .uv = uv_br },
-                .{ .pos = cursor + pos_tr, .uv = uv_tr },
-                .{ .pos = cursor + pos_tl, .uv = uv_tl },
-            } };
-            quads.append(quad) catch unreachable;
-        }
+        const pos_bl = char_data.pos_btm_left;
+        const pos_tr = char_data.pos_top_right;
+        const pos_br = vec2{ pos_tr[0], pos_bl[1] };
+        const pos_tl = vec2{ pos_bl[0], pos_tr[1] };
+        const uv_bl = char_data.uv_btm_left;
+        const uv_tr = char_data.uv_top_right;
+        const uv_br = vec2{ uv_tr[0], uv_bl[1] };
+        const uv_tl = vec2{ uv_bl[0], uv_tr[1] };
+        const quad = Quad{ .points = [4]Quad.Vertex{
+            .{ .pos = cursor + pos_bl, .uv = uv_bl },
+            .{ .pos = cursor + pos_br, .uv = uv_br },
+            .{ .pos = cursor + pos_tr, .uv = uv_tr },
+            .{ .pos = cursor + pos_tl, .uv = uv_tl },
+        } };
+        quads.append(quad) catch unreachable;
         cursor[0] += @as(f32, @floatFromInt(char_data.advance[0])) * scale;
         cursor[1] += @as(f32, @floatFromInt(char_data.advance[1])) * scale;
-
-        max_x = @max(max_x, cursor[0]);
     }
 
-    return switch (mode) {
-        .rect => .{
-            .min = vec2{ start_pos[0], cursor[1] + metrics.descent },
-            .max = vec2{ max_x, start_pos[1] + metrics.ascent },
-        },
-        .quad => quads.toOwnedSlice(),
-    };
+    return try quads.toOwnedSlice();
 }
 
 pub const Codepoint = u21;
