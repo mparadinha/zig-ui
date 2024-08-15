@@ -50,6 +50,34 @@ pub fn reduceSlice(comptime T: type, comptime op: std.builtin.ReduceOp, values: 
     return result;
 }
 
+pub const BinOp = enum { Add, Sub, Mul, Div };
+pub fn binOpSlices(comptime T: type, comptime op: BinOp, dst: []T, lhs: []const T, rhs: []const T) void {
+    std.debug.assert(dst.len == lhs.len and dst.len == rhs.len);
+
+    const Len = std.simd.suggestVectorLength(T) orelse 1;
+    const V = @Vector(Len, T);
+
+    var idx: usize = 0;
+    while (idx + Len < dst.len) {
+        const vec_lhs: V = lhs[idx..][0..Len].*;
+        const vec_rhs: V = rhs[idx..][0..Len].*;
+        const vec_result = switch (op) {
+            .Add => vec_lhs + vec_rhs,
+            .Sub => vec_lhs - vec_rhs,
+            .Mul => vec_lhs * vec_rhs,
+            .Div => vec_lhs / vec_rhs,
+        };
+        dst[idx..][0..Len].* = vec_result;
+        idx += Len;
+    }
+    for (dst[idx..]) |*v| v.* = switch (op) {
+        .Add => lhs[idx] + rhs[idx],
+        .Sub => lhs[idx] - rhs[idx],
+        .Mul => lhs[idx] * rhs[idx],
+        .Div => lhs[idx] / rhs[idx],
+    };
+}
+
 /// note: Not all objects are guaranteed to have unique memory representations.
 /// Some examples are:
 /// - floats (there's multiple bit patterns for NaN, inf., +0 vs -0, etc.)

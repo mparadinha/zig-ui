@@ -253,7 +253,7 @@ pub const Shader = struct {
     pub fn uniform(self: Shader, name: []const u8) i32 {
         const loc = gl.getUniformLocation(self.prog_id, &name[0]);
         if (loc == -1) std.log.err("error getting uniform '{s}' from shader '{s}'", .{ name, self.name });
-        //if (loc == -1) std.debug.panic("error getting uniform '{s}' from shader '{s}'", .{ name, self.name });
+        // if (loc == -1) std.debug.panic("error getting uniform '{s}' from shader '{s}'", .{ name, self.name });
         return loc;
     }
 

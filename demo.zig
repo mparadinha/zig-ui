@@ -11,10 +11,7 @@ const Window = zig_ui.Window;
 const UI = zig_ui.UI;
 
 pub var prof = Profiler{};
-const fps_value: f32 = 1.0 / 60.0;
-var max_graph_y: f32 = fps_value * 1.5;
-var auto_size_graph: bool = true;
-var zone_table_include_children: bool = true;
+const target_ms_per_frame: f32 = 1.0 / 60.0;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{
     // turning this on enables tracking of total allocation requests; the default
@@ -45,7 +42,7 @@ pub fn main() !void {
         .current_tabs = std.ArrayList(usize).init(allocator),
     };
     defer demo.current_tabs.deinit();
-    var show_profiler_graph = true;
+    var show_profiler = true;
     var profiler_graph_rect: UI.Rect = undefined;
 
     var last_time: f32 = @floatCast(glfw.getTime());
@@ -70,7 +67,7 @@ pub fn main() !void {
 
         try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
-        if (show_profiler_graph) profiler_graph_rect = showProfilerInfo(&ui, &prof);
+        if (show_profiler) profiler_graph_rect = showProfilerInfo(&ui, &prof);
         ui.endBuild(dt);
 
         if (window.event_queue.searchAndRemove(.KeyDown, .{
@@ -81,14 +78,14 @@ pub fn main() !void {
         if (window.event_queue.searchAndRemove(.KeyDown, .{
             .mods = .{ .control = true, .shift = true },
             .key = .p,
-        })) show_profiler_graph = !show_profiler_graph;
+        })) show_profiler = !show_profiler;
 
         window.clear(demo.clear_color);
         // <do whatever other rendering you want below the UI here>
         try ui.render();
         if (dbg_ui_view.active) try dbg_ui_view.show(&ui, fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window, dt);
         if (demo.show_zoom) try renderZoomDisplay(allocator, demo, fbsize);
-        if (show_profiler_graph) try renderProfilerGraph(allocator, &prof, profiler_graph_rect, fbsize);
+        if (show_profiler) try renderProfilerGraph(allocator, &prof, profiler_graph_rect, fbsize);
 
         // @debug: print info about Node directly under cursor
         if (window.event_queue.searchAndRemove(.KeyDown, .{
@@ -624,7 +621,7 @@ fn showDemoTabPerfTesting(ui: *UI, state: *DemoState) void {
     _ = ui.checkBox("Scale dummy label count to target 60fps", &state.auto_scale_dummy_labels);
     if (state.auto_scale_dummy_labels) {
         if (prof.frame_idx > 0) {
-            const dt_diff = prof.frame_times[prof.frame_idx - 1] - fps_value;
+            const dt_diff = prof.frame_times[prof.frame_idx - 1] - target_ms_per_frame;
             if (dt_diff > 0.001) state.dummy_labels -= 1;
             if (dt_diff < -0.001) state.dummy_labels += 1;
         }
@@ -727,6 +724,7 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
 
 const StaticHashTable = zig_ui.utils.StaticHashTable;
 const reduceSlice = zig_ui.utils.reduceSlice;
+const binOpSlices = zig_ui.utils.binOpSlices;
 
 pub const Profiler = struct {
     zone_table: ZoneTable = .{},
@@ -751,9 +749,8 @@ pub const Profiler = struct {
             return;
         }
 
-        var zone_iter = self.zone_table.iterator();
-        while (zone_iter.next()) |entry| entry.value.commit();
-        self.self_zone.commit();
+        var zone_iter = self.zoneIterator(true, false);
+        while (zone_iter.next()) |zone| zone.commit();
 
         const new_frame_start = Zone.timestamp();
         const elapsed_ns: f32 = @floatFromInt(new_frame_start - self.frame_start);
@@ -797,6 +794,36 @@ pub const Profiler = struct {
             const parent = self.zone_stack.slice()[self.zone_stack.len - 1];
             parent.acc_child_sample += zone_time;
         }
+    }
+
+    pub const ZoneIterator = struct {
+        profiler: *Profiler,
+        include_profiler: bool,
+        only_displayed_zones: bool,
+        zone_it: ZoneTable.Iterator,
+        returned_profiler_zone: bool = false,
+
+        pub fn next(self: *ZoneIterator) ?*Zone {
+            if (self.include_profiler and !self.returned_profiler_zone) {
+                self.returned_profiler_zone = true;
+                if (!self.only_displayed_zones or self.profiler.self_zone.display)
+                    return &self.profiler.self_zone;
+            }
+            var entry = self.zone_it.next() orelse return null;
+            if (self.only_displayed_zones) {
+                while (!entry.value.display) entry = self.zone_it.next() orelse return null;
+            }
+            return entry.value;
+        }
+    };
+
+    pub fn zoneIterator(self: *Profiler, include_profiler: bool, only_displayed_zones: bool) ZoneIterator {
+        return .{
+            .profiler = self,
+            .include_profiler = include_profiler,
+            .only_displayed_zones = only_displayed_zones,
+            .zone_it = self.zone_table.iterator(),
+        };
     }
 };
 
@@ -863,6 +890,17 @@ pub const Zone = struct {
         self.idx %= number_of_samples;
     }
 };
+
+const ProfilerDisplay = struct {
+    mode: Mode = .sample_time,
+    max_y: f32 = target_ms_per_frame * max_y_leeway_multiplier,
+    include_children: bool = true,
+
+    pub const Mode = enum { sample_time, call_count };
+
+    pub const max_y_leeway_multiplier = 1.05;
+};
+var profiler_display = ProfilerDisplay{};
 
 fn helperShowNodeTableHist(ui: *UI) void {
     prof.startZoneN("helperShowNodeTableHist");
@@ -968,8 +1006,6 @@ fn helperShowZoneTable(ui: *UI, profiler: *Profiler) void {
     _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) }, .y);
     defer _ = ui.popParent();
 
-    _ = ui.checkBox("Include children in zone time", &zone_table_include_children);
-
     const n_samples = @min(Zone.number_of_samples, profiler.frame_idx);
     const frame_times = profiler.frame_times[0..n_samples];
 
@@ -981,17 +1017,17 @@ fn helperShowZoneTable(ui: *UI, profiler: *Profiler) void {
         avg_s_per_call: f32,
 
         pub fn fromZone(zone: *Zone, frame_samples: []const f32, used_samples: usize, include_children: bool) @This() {
+            std.debug.assert(used_samples == frame_samples.len);
             const samples = zone.samples[0..used_samples];
             const child_samples = zone.child_samples[0..used_samples];
             const sample_counter = zone.sample_counter[0..used_samples];
             const total_pct_of_frame: f32 = sum: {
-                var sum: f32 = 0;
-                if (include_children) {
-                    for (samples, frame_samples) |sample, f_sample| sum += sample / f_sample;
-                } else {
-                    for (samples, child_samples, frame_samples) |sample, child, f_sample| sum += (sample - child) / f_sample;
-                }
-                break :sum sum;
+                var tmp_buf: [Zone.number_of_samples]f32 = undefined;
+                const tmp = tmp_buf[0..used_samples];
+                @memcpy(tmp, samples);
+                if (!include_children) binOpSlices(f32, .Sub, tmp, tmp, child_samples);
+                binOpSlices(f32, .Div, tmp, tmp, frame_samples);
+                break :sum reduceSlice(f32, .Add, tmp);
             };
             const total_time = if (include_children)
                 reduceSlice(f32, .Add, samples)
@@ -999,13 +1035,15 @@ fn helperShowZoneTable(ui: *UI, profiler: *Profiler) void {
                 reduceSlice(f32, .Add, samples) - reduceSlice(f32, .Add, child_samples);
             const total_calls: f32 = @floatFromInt(reduceSlice(u32, .Add, sample_counter));
             const total_s_per_call = sum: {
-                var sum: f32 = 0;
-                if (include_children) {
-                    for (samples, sample_counter) |sample, count| sum += sample / @as(f32, @floatFromInt(count));
-                } else {
-                    for (samples, child_samples, sample_counter) |sample, child, count| sum += (sample - child) / @as(f32, @floatFromInt(count));
-                }
-                break :sum sum;
+                var tmp_buf: [Zone.number_of_samples]f32 = undefined;
+                const tmp = tmp_buf[0..used_samples];
+                @memcpy(tmp, samples);
+                if (!include_children) binOpSlices(f32, .Sub, tmp, tmp, child_samples);
+                var tmp_counter_buf: [Zone.number_of_samples]f32 = undefined;
+                const tmp_counter = tmp_counter_buf[0..used_samples];
+                for (tmp_counter, 0..) |*v, idx| v.* = @floatFromInt(@max(sample_counter[idx], 1));
+                binOpSlices(f32, .Div, tmp, tmp, tmp_counter);
+                break :sum reduceSlice(f32, .Add, tmp);
             };
             const n_samples_f: f32 = @floatFromInt(used_samples);
             return .{
@@ -1017,13 +1055,15 @@ fn helperShowZoneTable(ui: *UI, profiler: *Profiler) void {
             };
         }
     };
-    var table_lines = blk: {
-        var array = std.BoundedArray(TableEntry, Profiler.bucket_count * Profiler.bucket_entries + 1){};
-        array.append(TableEntry.fromZone(&profiler.self_zone, frame_times, n_samples, zone_table_include_children)) catch unreachable;
-        var zone_it = profiler.zone_table.iterator();
-        while (zone_it.next()) |entry| {
-            array.append(TableEntry.fromZone(entry.value, frame_times, n_samples, zone_table_include_children)) catch unreachable;
+    const table_lines = blk: {
+        const line_count = (Profiler.bucket_count * Profiler.bucket_entries) + 1;
+        var array = std.BoundedArray(TableEntry, line_count){};
+
+        var zone_it = profiler.zoneIterator(true, false);
+        while (zone_it.next()) |zone| {
+            array.append(TableEntry.fromZone(zone, frame_times, n_samples, profiler_display.include_children)) catch unreachable;
         }
+
         prof.startZoneN("sort table entries");
         const SortCtx = struct { sort_col_idx: usize, reverse: bool };
         std.sort.insertion(TableEntry, array.slice(), SortCtx{
@@ -1136,24 +1176,72 @@ fn helperShowZoneTable(ui: *UI, profiler: *Profiler) void {
 fn showProfilerInfo(ui: *UI, profiler: *Profiler) UI.Rect {
     const w = ui.startWindow("profiler_window", UI.Size.exact(.percent, 1, 1), UI.RelativePlacement.simple(vec2{ 0, 0 }));
     defer ui.endWindow(w);
+    helperShowNodeTableHist(ui);
     {
         ui.startLine();
         defer ui.endLine();
-        _ = ui.checkBox("Auto-size graph", &auto_size_graph);
-        ui.labelF("max_graph_y: {d: >4.1}", .{max_graph_y * std.time.ms_per_s});
-        const slider_size = [2]UI.Size{ UI.Size.em(50, 1), UI.Size.em(1, 1) };
-        ui.slider(f32, "max_graph_y", slider_size, &max_graph_y, 0, 0.1);
+        _ = ui.checkBox("Include children in zone time", &profiler_display.include_children);
+        if (ui.button("Enable all zones").clicked) {
+            var zone_it = profiler.zoneIterator(true, false);
+            while (zone_it.next()) |zone| zone.display = true;
+        }
+        if (ui.button("Disable all zones").clicked) {
+            var zone_it = profiler.zoneIterator(true, false);
+            while (zone_it.next()) |zone| zone.display = false;
+        }
+        {
+            const other_mode: ProfilerDisplay.Mode = switch (profiler_display.mode) {
+                .sample_time => .call_count,
+                .call_count => .sample_time,
+            };
+            if (ui.buttonF("Switch graph to {s}", .{switch (other_mode) {
+                .sample_time => "sample time",
+                .call_count => "call counter",
+            }}).clicked)
+                profiler_display.mode = other_mode;
+        }
     }
-    helperShowNodeTableHist(ui);
     {
         _ = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.flexible(.percent, 1, 1), .x);
         defer _ = ui.popParent();
+
         helperShowZoneTable(ui, profiler);
+
         const profiler_graph_node = ui.addNode(.{
             .draw_border = true,
         }, "profiler_graph_node", .{
             .size = UI.Size.flexible(.percent, 1, 1),
         });
+
+        { // graph y-axis scale
+            _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) }, .y);
+            defer _ = ui.popParent();
+
+            const order_of_mag = std.math.pow(f32, 10, @ceil(std.math.log10(@abs(profiler_display.max_y))));
+            const min_divisions = 5;
+            const max_divisions = 10;
+            var step = (order_of_mag / 10);
+            while (profiler_display.max_y / step < min_divisions + 2) step /= 2;
+            while (profiler_display.max_y / step > max_divisions - 2) step *= 2;
+            const graph_px_height = profiler_graph_node.rect.size()[1];
+            var value: f32 = step;
+            while (value < profiler_display.max_y) : (value += step) {
+                const pct = value / profiler_display.max_y;
+                const px_pos = pct * graph_px_height;
+                const str = switch (profiler_display.mode) {
+                    .sample_time => ui.fmtTmpString("{d:.0}ms", .{value * std.time.ms_per_s}),
+                    .call_count => ui.fmtTmpString("{d}", .{value}),
+                };
+                _ = ui.addNode(.{
+                    .draw_text = true,
+                    .floating_y = true,
+                    .no_id = true,
+                }, str, .{
+                    .rel_pos = UI.RelativePlacement.absolute(.{ .center = vec2{ 0, px_pos } }),
+                });
+            }
+        }
+
         return profiler_graph_node.rect;
     }
 }
@@ -1169,33 +1257,57 @@ fn renderProfilerGraph(allocator: Allocator, profiler: *Profiler, rect: UI.Rect,
         .vertex =
         \\#version 330 core
         \\in float sample;
+        \\uniform bool sample_is_uint;
         \\uniform uint sample_count;
         \\uniform float max_y;
         \\uniform vec2 btmleft;
         \\uniform vec2 size;
         \\uniform vec2 screen_size;
+        \\out float pass_value;
         \\void main() {
-        \\    vec2 pos_graph = vec2(gl_VertexID / float(max(1, sample_count) - 1), sample / max_y);
+        \\    float value = sample_is_uint ? float(floatBitsToInt(sample)) : sample;
+        \\    vec2 pos_graph = vec2(gl_VertexID / float(max(1, sample_count) - 1), value / max_y);
         \\    vec2 pos_px = (pos_graph * size) + btmleft;
         \\    vec2 pos = (pos_px / screen_size) * 2 - vec2(1);
         \\    gl_Position = vec4(pos, 0, 1);
+        \\    pass_value = value;
         \\}
         ,
         .fragment =
         \\#version 330 core
+        \\in float pass_value;
+        \\uniform float max_y;
         \\uniform vec4 color;
         \\out vec4 FragColor;
-        \\void main() { FragColor = color; }
+        \\void main() {
+        \\    if (pass_value > max_y) discard;
+        \\    FragColor = color;
+        \\}
         ,
     });
     defer shader.deinit();
 
-    if (auto_size_graph) {
-        max_graph_y = 0;
-        var zone_it = profiler.zone_table.iterator();
-        while (zone_it.next()) |entry| {
-            const zone = entry.value;
-            max_graph_y = @max(max_graph_y, reduceSlice(f32, .Max, &zone.samples));
+    // auto-size graph
+    {
+        profiler_display.max_y = 0;
+        var zone_it = profiler.zoneIterator(true, true);
+        while (zone_it.next()) |zone| {
+            const max_sample = switch (profiler_display.mode) {
+                .sample_time => blk: {
+                    if (profiler_display.include_children) {
+                        break :blk reduceSlice(f32, .Max, &zone.samples);
+                    } else {
+                        var tmp: [Zone.number_of_samples]f32 = undefined;
+                        binOpSlices(f32, .Sub, &tmp, &zone.samples, &zone.child_samples);
+                        break :blk reduceSlice(f32, .Max, &tmp);
+                    }
+                },
+                .call_count => blk: {
+                    const max_sample = reduceSlice(u32, .Max, &zone.sample_counter);
+                    break :blk @as(f32, @floatFromInt(max_sample));
+                },
+            };
+            profiler_display.max_y = @max(profiler_display.max_y, max_sample * 1.05);
         }
     }
 
@@ -1203,26 +1315,40 @@ fn renderProfilerGraph(allocator: Allocator, profiler: *Profiler, rect: UI.Rect,
     shader.set("btmleft", rect.min);
     shader.set("size", rect.size());
     shader.set("screen_size", @as(vec2, @floatFromInt(fbsize)));
-    shader.set("max_y", max_graph_y);
-    var zone_it = profiler.zone_table.iterator();
-    while (zone_it.next()) |entry| {
-        const zone = entry.value;
-        if (!zone.display) continue;
+    shader.set("max_y", profiler_display.max_y);
+    var zone_it = profiler.zoneIterator(true, true);
+    while (zone_it.next()) |zone| {
+        const n_samples = Zone.number_of_samples;
         // TODO: don't create these buffers every time. create/alloc once then just update data
-        const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, zone.samples.len);
+        const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, n_samples);
         defer vert_buf.deinit();
-        vert_buf.update(sliceAsBytes(f32, &zone.samples));
-        shader.set("sample_count", @as(u32, @intCast(zone.samples.len)));
+        switch (profiler_display.mode) {
+            .sample_time => {
+                if (profiler_display.include_children) {
+                    vert_buf.update(sliceAsBytes(f32, &zone.samples));
+                } else {
+                    var tmp: [Zone.number_of_samples]f32 = undefined;
+                    binOpSlices(f32, .Sub, &tmp, &zone.samples, &zone.child_samples);
+                    vert_buf.update(sliceAsBytes(f32, &tmp));
+                }
+            },
+            .call_count => {
+                vert_buf.update(sliceAsBytes(u32, &zone.sample_counter));
+            },
+        }
+        shader.set("sample_is_uint", profiler_display.mode == .call_count);
+        shader.set("sample_count", @as(u32, @intCast(n_samples)));
         shader.set("color", zone.color);
         vert_buf.draw(gl.LINE_STRIP);
     }
-
-    { // draw 60fps line
-        const samples = &[_]f32{ fps_value, fps_value };
+    // draw 60fps line
+    if (profiler_display.mode == .sample_time) {
+        const samples = &[_]f32{ target_ms_per_frame, target_ms_per_frame };
 
         const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, samples.len);
         defer vert_buf.deinit();
         vert_buf.update(sliceAsBytes(f32, samples));
+        shader.set("sample_is_uint", false);
         shader.set("sample_count", @as(u32, @intCast(samples.len)));
         shader.set("color", vec4{ 0, 0.9, 0, 1 });
         vert_buf.draw(gl.LINE_STRIP);

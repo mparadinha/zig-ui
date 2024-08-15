@@ -254,19 +254,22 @@ pub fn checkBox(ui: *UI, str: []const u8, value: *bool) Signal {
     const hash_str = UI.hashPartOfString(str);
     const disp_str = UI.displayPartOfString(str);
 
-    const p_size = Size.fillByChildren(1, 1);
-    const p = ui.pushLayoutParentF(.{
-        .draw_background = true,
-    }, "{s}_parent", .{hash_str}, p_size, .x);
-    defer ui.popParentAssert(p);
+    _ = ui.pushLayoutParentF(.{}, "###{s}", .{hash_str}, UI.Size.children2(1, 1), .x);
+    defer _ = ui.popParent();
 
-    const box_signal = ui.iconButtonF("{s}###{s}_button", .{ Icons.ok, hash_str });
-    if (!value.*) box_signal.node.?.flags.draw_text = false;
-    if (box_signal.clicked) value.* = !value.*;
+    ui.pushTmpStyle(.{
+        .font_size = 0.75 * ui.topStyle().font_size,
+        .alignment = .center,
+    });
+    const tick_box = ui.iconButton(Icons.ok).node.?;
+    if (!value.*) {
+        tick_box.flags.draw_text = false;
+    }
+    if (tick_box.signal.clicked) value.* = !value.*;
 
     ui.label(disp_str);
 
-    return box_signal;
+    return tick_box.signal;
 }
 
 pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
