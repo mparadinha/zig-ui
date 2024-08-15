@@ -341,13 +341,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
             // check if text truncation is needed
             const quad_overflows = rect.top_right_pos[0] - ellipsis_text_base[0] > 1;
             if (needs_truncation and quad_overflows) {
-                // drawing this last clipped char looks weird
-                // // draw this last character, but clip it to allow for ellipsis without overlaps
-                // rect.clip_rect_max[0] = max_x_before_ellipsis;
-                // try shader_inputs.append(rect);
-
                 // draw ellpsis and ignore the rest of the characters
-                // const ell_text_base = vec2{ max_x_before_ellipsis, text_base[1] };
                 for (ellipsis_quads) |ell_quad| {
                     rect = base_text_rect;
                     rect.btm_left_pos = ellipsis_text_base + ell_quad.points[0].pos;
@@ -359,6 +353,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
                         try shader_inputs.append(ShaderInput.dbg(rect.btm_left_pos, rect.top_right_pos, vec4{ 0, 1, 1, 1 }));
                     }
                 }
+                node.text_truncated = true;
                 break;
             }
 
@@ -367,7 +362,7 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
                 try shader_inputs.append(ShaderInput.dbg(rect.btm_left_pos, rect.top_right_pos, vec4{ 0, 1, 1, 1 }));
             }
         }
-    }
+    } else node.text_truncated = false;
 }
 
 pub const RenderOrderNodeIterator = struct {

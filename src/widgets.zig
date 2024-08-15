@@ -119,12 +119,13 @@ pub fn button(ui: *UI, str: []const u8) Signal {
     return node.signal;
 }
 
+pub const subtle_button_flags = Flags{
+    .clickable = true,
+    .draw_text = true,
+    .draw_active_effects = true,
+};
 pub fn subtleButton(ui: *UI, str: []const u8) Signal {
-    const node = ui.addNode(.{
-        .clickable = true,
-        .draw_text = true,
-        .draw_active_effects = true,
-    }, str, .{
+    const node = ui.addNode(subtle_button_flags, str, .{
         .cursor_type = .pointing_hand,
     });
     return node.signal;

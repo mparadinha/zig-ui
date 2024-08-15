@@ -13,3 +13,4 @@ pub const vec4 = @Vector(4, f32);
 pub const uvec2 = @Vector(2, u32);
 pub const uvec3 = @Vector(3, u32);
 pub const uvec4 = @Vector(4, u32);
+pub const ivec2 = @Vector(2, i32);

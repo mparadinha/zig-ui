@@ -168,12 +168,14 @@ pub const Flags = packed struct {
     draw_active_effects: bool = false,
     disable_text_truncation: bool = false,
 
-    // node is not taken into account in the normal layout
+    // layout flags
+    // a floating node is not taken into account in the normal layout
     floating_x: bool = false,
     floating_y: bool = false,
 
-    no_id: bool = false,
-    ignore_hash_sep: bool = false,
+    // special flags
+    no_id: bool = false, // node gets assigned a random hash, not related to any string
+    ignore_hash_sep: bool = false, // don't treat '###' as the special display/hash separator
 
     pub fn interactive(self: Flags) bool {
         return self.clickable or
@@ -242,6 +244,7 @@ pub const Node = struct {
     rect: Rect,
     clip_rect: Rect,
     children_size: vec2,
+    text_truncated: bool,
 
     // persists across frames (but gets updated every frame)
     signal: Signal,
@@ -1559,6 +1562,17 @@ pub const FontCache = struct {
     quad_cache: QuadCache,
     frame_idx: usize,
 
+    // TODO: font building is bottlenecked on alloc of quad buffer because our
+    // test case have new buffers each frame. maybe use an arena for the allocs
+    // and 'promote' quad bufs to permanent cache after X amount of frames in the
+    // arena pool?
+    arena: std.heap.ArenaAllocator,
+
+    pub const RasterData = struct {
+        rect: Rect,
+        quads: []const Font.Quad, // owned by FontCache
+    };
+
     pub const QuadCache = utils.StaticHashTable(CacheKey, CacheValue, 128, 32);
     pub const CacheKey = struct {
         str_hash: u64,
@@ -1566,8 +1580,8 @@ pub const FontCache = struct {
         font_size: f32,
     };
     pub const CacheValue = struct {
-        rect: Rect,
-        quads: []const Font.Quad, // owned by FontCache
+        raster_data: RasterData,
+        permanent_cache: bool,
         last_frame_touched: usize,
     };
 
@@ -1580,6 +1594,7 @@ pub const FontCache = struct {
             .icon = try Font.fromTTF(allocator, font_opts.icon_font_path),
             .quad_cache = .{},
             .frame_idx = 0,
+            .arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
 
@@ -1589,7 +1604,10 @@ pub const FontCache = struct {
         self.italic.deinit();
         self.icon.deinit();
         var cache_it = self.quad_cache.iterator();
-        while (cache_it.next()) |entry| self.allocator.free(entry.value.quads);
+        while (cache_it.next()) |entry| {
+            if (entry.value.permanent_cache) self.allocator.free(entry.value.raster_data.quads);
+        }
+        self.arena.deinit();
     }
 
     pub fn getFont(self: *FontCache, font_type: FontType) *Font {
@@ -1605,18 +1623,15 @@ pub const FontCache = struct {
         return (try self.buildText(str, font_type, font_size)).rect;
     }
 
-    pub fn textQuads(self: *FontCache, str: []const u8, font_type: FontType, font_size: f32) ![]const Font.Quad {
-        return (try self.buildText(str, font_type, font_size)).quads;
-    }
-
     pub fn buildText(
         self: *FontCache,
         str: []const u8,
         font_type: FontType,
         font_size: f32,
-    ) !CacheValue {
+    ) !RasterData {
         prof.startZoneN("FontCache.buildText");
         defer prof.stopZone();
+        const arena = self.arena.allocator();
         const entry = .{
             .str_hash = std.hash.Wyhash.hash(0, str),
             .font_type = font_type,
@@ -1624,26 +1639,28 @@ pub const FontCache = struct {
         };
         const gop = self.quad_cache.getOrPut(entry) catch {
             // bypass the cache when OOM instead of failing
-            return self.buildCacheData(str, font_type, font_size);
+            return self.buildCacheData(arena, str, font_type, font_size);
         };
         const cached_data = gop.value;
         if (!gop.found_existing) {
-            cached_data.* = try self.buildCacheData(str, font_type, font_size);
+            cached_data.raster_data = try self.buildCacheData(arena, str, font_type, font_size);
+            cached_data.permanent_cache = false;
         }
         cached_data.last_frame_touched = self.frame_idx;
-        return cached_data.*;
+        return cached_data.raster_data;
     }
 
     fn buildCacheData(
         self: *FontCache,
+        allocator: Allocator,
         str: []const u8,
         font_type: FontType,
         font_size: f32,
-    ) !CacheValue {
+    ) !RasterData {
         prof.startZoneN("FontCache.buildCacheData");
         defer prof.stopZone();
         const font = self.getFont(font_type);
-        const quads = try font.buildTextAt(self.allocator, str, font_size, vec2{ 0, 0 });
+        const quads = try font.buildTextAt(allocator, str, font_size, vec2{ 0, 0 });
         var tight_rect = Rect{ .min = @splat(std.math.floatMax(f32)), .max = @splat(0) };
         for (quads) |quad| {
             tight_rect.min = @min(tight_rect.min, quad.points[0].pos);
@@ -1655,19 +1672,34 @@ pub const FontCache = struct {
         rect.min[1] = @min(rect.min[1], metrics.descent);
         rect.min[0] = @min(rect.min[0], 0); // we start the cursor at 0
 
-        return .{ .quads = quads, .rect = rect, .last_frame_touched = self.frame_idx };
+        return .{ .quads = quads, .rect = rect };
     }
 
-    /// Remove all cache entries that haven't been touched for at least 2 frames.
-    pub fn prune(self: *FontCache, frame_idx: usize) !void {
-        self.frame_idx = frame_idx;
+    /// Remove all cache entries that weren't touched last frame.
+    pub fn prune(self: *FontCache, current_frame_idx: usize) !void {
         var cache_it = self.quad_cache.iterator();
         while (cache_it.next()) |entry| {
-            if (entry.value.last_frame_touched + 1 < self.frame_idx) {
-                self.allocator.free(entry.value.quads);
-                self.quad_cache.remove(entry.key.*);
+            const is_stale = entry.value.last_frame_touched < self.frame_idx;
+
+            // remove stale entry
+            if (is_stale) {
+                if (entry.value.permanent_cache) self.allocator.free(entry.value.raster_data.quads);
+                cache_it.remove();
+            }
+
+            // promote used entries things to permanent cache
+            if (!is_stale and !entry.value.permanent_cache) {
+                entry.value.permanent_cache = true;
+                // 'move' the allocation from the arena to 'self.allocator'
+                entry.value.raster_data.quads = try self.allocator.dupe(Font.Quad, entry.value.raster_data.quads);
             }
         }
+
+        // everything that remains in the arena now are stale entries
+        // that only got used once in the same frame they were created
+        _ = self.arena.reset(.retain_capacity);
+
+        self.frame_idx = current_frame_idx;
     }
 };
 

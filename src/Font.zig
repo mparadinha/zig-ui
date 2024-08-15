@@ -2,8 +2,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const zig_ui = @import("../zig_ui.zig");
 const gl = zig_ui.gl;
+const gfx = zig_ui.gfx;
+const utils = zig_ui.utils;
 const vec2 = zig_ui.vec2;
-const gfx = @import("graphics.zig");
+const uvec2 = zig_ui.uvec2;
+const ivec2 = zig_ui.ivec2;
 const c = @cImport({
     @cInclude("stb_rect_pack.h");
     @cInclude("stb_truetype.h");
@@ -15,14 +18,17 @@ const Font = @This();
 
 allocator: Allocator,
 file_data: [:0]u8,
+font_info: c.stbtt_fontinfo,
+
+kerning_data: KerningMap,
 
 texture: gfx.Texture,
 texture_data: []u8,
-
-font_info: c.stbtt_fontinfo,
-char_maps: SizedCharMaps,
-kerning_data: KerningMap,
+raster_cache: RasterCache,
 packing_ctx: c.stbtt_pack_context,
+
+const RasterCache = utils.StaticHashTable(RasterCacheKey, GlyphData, 64, 8);
+const RasterCacheKey = struct { codepoint: u21, size: f32 };
 
 /// call 'deinit' when you're done with the Font
 pub fn fromTTF(allocator: Allocator, filepath: []const u8) !Font {
@@ -40,12 +46,12 @@ pub fn fromTTF(allocator: Allocator, filepath: []const u8) !Font {
     var self = Font{
         .allocator = allocator,
         .file_data = file_data,
+        .font_info = font_info,
         .texture = undefined,
         .texture_data = undefined,
-        .font_info = font_info,
-        .char_maps = SizedCharMaps.init(allocator),
-        .kerning_data = KerningMap.init(allocator),
+        .raster_cache = .{},
         .packing_ctx = undefined,
+        .kerning_data = KerningMap.init(allocator),
     };
     try self.setupPacking(512);
 
@@ -55,13 +61,9 @@ pub fn fromTTF(allocator: Allocator, filepath: []const u8) !Font {
 pub fn deinit(self: *Font) void {
     self.allocator.free(self.texture_data);
     self.texture.deinit();
-    {
-        var iter = self.char_maps.valueIterator();
-        while (iter.next()) |sized_map| sized_map.map.deinit();
-        self.char_maps.deinit();
-    }
     self.kerning_data.deinit();
     self.allocator.free(self.file_data);
+    self.raster_cache.deinit(self.allocator);
 }
 
 pub const ScaledMetrics = struct {
@@ -69,6 +71,7 @@ pub const ScaledMetrics = struct {
     descent: f32, // how much below baseline the font reaches
     line_gap: f32, // between two lines
     line_advance: f32, // vertical space taken by one line
+    scale: f32,
 };
 
 pub fn getScaledMetrics(self: Font, pixel_size: f32) ScaledMetrics {
@@ -82,6 +85,7 @@ pub fn getScaledMetrics(self: Font, pixel_size: f32) ScaledMetrics {
         .descent = @as(f32, @floatFromInt(descent)) * scale,
         .line_gap = @as(f32, @floatFromInt(line_gap)) * scale,
         .line_advance = @as(f32, @floatFromInt(ascent - descent + line_gap)) * scale,
+        .scale = scale,
     };
 }
 
@@ -89,11 +93,6 @@ pub const Quad = extern struct {
     /// points are given in counter clockwise order starting from bottom left
     points: [4]Vertex,
     const Vertex = packed struct { pos: vec2, uv: vec2 };
-};
-
-pub const Rect = struct {
-    min: vec2,
-    max: vec2,
 };
 
 /// Caller owns returned memory
@@ -104,24 +103,18 @@ pub fn buildTextAt(
     pixel_size: f32,
     start_pos: vec2,
 ) ![]Quad {
-    prof.startZoneN("Font.buildTextAt");
+    prof.startZoneN("Font." ++ @src().fn_name);
     defer prof.stopZone();
 
-    const char_map = try self.getSizedCharMap(pixel_size);
-    const metrics = char_map.metrics;
-    const scale = char_map.scale;
+    const metrics = self.getScaledMetrics(pixel_size);
 
     var quads = try std.ArrayList(Quad).initCapacity(allocator, str.len);
 
     var cursor = start_pos;
 
-    std.debug.assert(utf8Validate(str));
-    var utf8_iter = std.unicode.Utf8View.initUnchecked(str).iterator();
-    while (utf8_iter.nextCodepoint()) |codepoint| {
-        const next_codepoint: ?u21 = if (utf8_iter.i >= utf8_iter.bytes.len)
-            null
-        else
-            std.unicode.utf8Decode(utf8_iter.peek(1)) catch @panic("Invalid utf8");
+    var utf8_iter = utils.Utf8Iterator{ .bytes = str };
+    while (utf8_iter.next()) |codepoint| {
+        const next_codepoint = utf8_iter.peek();
 
         if (codepoint == '\n') {
             if (next_codepoint != null) {
@@ -133,13 +126,14 @@ pub fn buildTextAt(
 
         // TODO: kerning
 
-        const char_data = try self.getCharDataFromMap(char_map, codepoint);
-        const pos_bl = char_data.pos_btm_left;
-        const pos_tr = char_data.pos_top_right;
+        const glyph_data = try self.getGlyphRasterData(codepoint, pixel_size);
+
+        const pos_bl = glyph_data.pos_btm_left;
+        const pos_tr = glyph_data.pos_top_right;
         const pos_br = vec2{ pos_tr[0], pos_bl[1] };
         const pos_tl = vec2{ pos_bl[0], pos_tr[1] };
-        const uv_bl = char_data.uv_btm_left;
-        const uv_tr = char_data.uv_top_right;
+        const uv_bl = glyph_data.uv_btm_left;
+        const uv_tr = glyph_data.uv_top_right;
         const uv_br = vec2{ uv_tr[0], uv_bl[1] };
         const uv_tl = vec2{ uv_bl[0], uv_tr[1] };
         const quad = Quad{ .points = [4]Quad.Vertex{
@@ -149,52 +143,62 @@ pub fn buildTextAt(
             .{ .pos = cursor + pos_tl, .uv = uv_tl },
         } };
         quads.append(quad) catch unreachable;
-        cursor[0] += @as(f32, @floatFromInt(char_data.advance[0])) * scale;
-        cursor[1] += @as(f32, @floatFromInt(char_data.advance[1])) * scale;
+        cursor[0] += @as(f32, @floatFromInt(glyph_data.advance[0])) * metrics.scale;
+        cursor[1] += @as(f32, @floatFromInt(glyph_data.advance[1])) * metrics.scale;
     }
 
     return try quads.toOwnedSlice();
 }
 
-pub const Codepoint = u21;
-pub const CharData = struct {
+pub const GlyphData = struct {
     pos_btm_left: vec2,
     pos_top_right: vec2,
     uv_btm_left: vec2,
     uv_top_right: vec2,
-    advance: @Vector(2, i32),
-};
-pub const CharMap = std.AutoHashMap(Codepoint, CharData);
+    advance: ivec2,
 
-pub const SizedCharMap = struct {
+    codepoint: u21,
     pixel_size: f32,
-    metrics: ScaledMetrics,
-    scale: f32,
-    map: CharMap,
 };
-pub const SizedCharMaps = std.HashMap(f32, SizedCharMap, struct {
-    /// Floats cannot use the 'auto hash' because floats values are not
-    /// guaranteed to have unique representations. For example, there's
-    /// multiple bit patterns for NaN, inf., +0 vs -0, etc.
-    /// This function will treats those as if they are distinct values.
-    pub fn hash(ctx: @This(), key: f32) u64 {
-        // on the inside we're all the same: just a bunch'a bytes
-        return std.hash_map.getAutoHashFn(u32, @This())(ctx, @bitCast(key));
-    }
-    pub fn eql(_: @This(), a: f32, b: f32) bool {
-        return a == b;
-    }
-}, std.hash_map.default_max_load_percentage);
 
-const CharPair = [2]u21;
-const KerningMap = std.HashMap(CharPair, i32, struct {
-    pub fn hash(_: @This(), key: CharPair) u64 {
-        return @as(u64, @intCast(key[0])) * 7 + @as(u64, @intCast(key[1])) * 11;
+pub fn getGlyphRasterData(self: *Font, codepoint: u21, pixel_size: f32) !GlyphData {
+    // prof.startZoneN("Font." ++ @src().fn_name);
+    // defer prof.stopZone();
+
+    const key = .{ .codepoint = codepoint, .size = pixel_size };
+    const gop = self.raster_cache.getOrPut(key) catch |err| switch (err) {
+        error.Overflow => blk: {
+            try self.raster_cache.grow(self.allocator);
+            break :blk try self.raster_cache.getOrPut(key);
+        },
+        else => return err,
+    };
+
+    if (!gop.found_existing) {
+        gop.value.codepoint = codepoint;
+        gop.value.pixel_size = pixel_size;
+
+        if (self.rasterGlyph(codepoint, pixel_size)) |data| {
+            gop.value.* = data;
+        } else {
+            // ran out of space in texture atlas: increase size and rebuild it
+            // (maybe we could copy over the already existing rastered glyphs
+            // but this happens so rarely that it's not really a problem for now)
+            const new_text_size = self.texture.width * 2;
+            self.resetPacking();
+            try self.setupPacking(new_text_size);
+            var cache_it = self.raster_cache.iterator();
+            while (cache_it.next()) |entry| {
+                const glyph_data: *GlyphData = entry.value;
+                glyph_data.* = self.rasterGlyph(glyph_data.codepoint, glyph_data.pixel_size) orelse unreachable;
+            }
+        }
+
+        self.texture.updateData(self.texture_data);
     }
-    pub fn eql(_: @This(), key_a: CharPair, key_b: CharPair) bool {
-        return key_a[0] == key_b[0] and key_a[1] == key_b[1];
-    }
-}, std.hash_map.default_max_load_percentage);
+
+    return gop.value.*;
+}
 
 fn setupPacking(self: *Font, texture_size: u32) !void {
     self.texture_data = try self.allocator.alloc(u8, texture_size * texture_size);
@@ -223,7 +227,7 @@ fn resetPacking(self: *Font) void {
     c.stbtt_PackEnd(&self.packing_ctx);
 }
 
-fn packCodepoint(self: *Font, codepoint: u21, size: f32) ?CharData {
+fn rasterGlyph(self: *Font, codepoint: u21, size: f32) ?GlyphData {
     var p: c.stbtt_packedchar = undefined;
     if (c.stbtt_PackFontRange(&self.packing_ctx, self.file_data.ptr, 0, size, @intCast(codepoint), 1, &p) == 0)
         return null;
@@ -231,75 +235,27 @@ fn packCodepoint(self: *Font, codepoint: u21, size: f32) ?CharData {
     var advance: i32 = undefined;
     c.stbtt_GetCodepointHMetrics(&self.font_info, codepoint, &advance, null);
 
-    const tex_size = vec2{ @floatFromInt(self.texture.width), @floatFromInt(self.texture.height) };
-    return CharData{
+    const tex_size: vec2 = @floatFromInt(uvec2{ self.texture.width, self.texture.height });
+    return GlyphData{
         .pos_btm_left = vec2{ p.xoff, -p.yoff2 },
         .pos_top_right = vec2{ p.xoff2, -p.yoff },
         .uv_btm_left = vec2{ @floatFromInt(p.x0), @floatFromInt(p.y1) } / tex_size,
         .uv_top_right = vec2{ @floatFromInt(p.x1), @floatFromInt(p.y0) } / tex_size,
-        .advance = @Vector(2, i32){ advance, 0 },
+        .advance = ivec2{ advance, 0 },
+        .codepoint = codepoint,
+        .pixel_size = size,
     };
 }
 
-// call this if we run out of space in texture. creates a bigger texture and repacks all
-// the glyphs we already had in there.
-fn increaseTextureAndRepack(self: *Font) !void {
-    const old_tex_size = self.texture.width;
-    const new_tex_size = old_tex_size * 2;
-
-    self.resetPacking();
-    try self.setupPacking(new_tex_size);
-
-    var map_iter = self.char_maps.valueIterator();
-    while (map_iter.next()) |sized_map| {
-        var char_iter = sized_map.map.iterator();
-        while (char_iter.next()) |entry| {
-            entry.value_ptr.* = self.packCodepoint(
-                entry.key_ptr.*,
-                sized_map.pixel_size,
-            ).?;
-        }
+const CharPair = [2]u21;
+const KerningMap = std.HashMap(CharPair, i32, struct {
+    pub fn hash(_: @This(), key: CharPair) u64 {
+        return @as(u64, @intCast(key[0])) * 7 + @as(u64, @intCast(key[1])) * 11;
     }
-
-    self.texture.updateData(self.texture_data);
-}
-
-pub fn ensureCharData(self: *Font, codepoint: u21, pixel_size: f32) !void {
-    _ = try self.getCharData(codepoint, pixel_size);
-}
-
-fn getCharDataFromMap(self: *Font, sized_map: *SizedCharMap, codepoint: u21) !CharData {
-    return sized_map.map.get(codepoint) orelse data: {
-        const char_data = self.packCodepoint(codepoint, sized_map.pixel_size) orelse {
-            // we ran out of space in the texture
-            try self.increaseTextureAndRepack();
-            return self.getCharDataFromMap(sized_map, codepoint);
-        };
-
-        try sized_map.map.put(codepoint, char_data);
-        self.texture.updateData(self.texture_data);
-
-        break :data char_data;
-    };
-}
-
-fn getCharData(self: *Font, codepoint: u21, pixel_size: f32) !CharData {
-    const char_map = try self.getSizedCharMap(pixel_size);
-    return self.getCharDataFromMap(char_map, codepoint);
-}
-
-fn getSizedCharMap(self: *Font, pixel_size: f32) !*SizedCharMap {
-    const gop = try self.char_maps.getOrPut(pixel_size);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{
-            .pixel_size = pixel_size,
-            .metrics = self.getScaledMetrics(pixel_size),
-            .scale = c.stbtt_ScaleForPixelHeight(&self.font_info, pixel_size),
-            .map = CharMap.init(self.allocator),
-        };
+    pub fn eql(_: @This(), key_a: CharPair, key_b: CharPair) bool {
+        return key_a[0] == key_b[0] and key_a[1] == key_b[1];
     }
-    return gop.value_ptr;
-}
+}, std.hash_map.default_max_load_percentage);
 
 fn getKerningAdvance(self: *Font, char_pair: [2]u21) !i32 {
     const entry = try self.kerning_data.getOrPut(char_pair);
@@ -308,41 +264,3 @@ fn getKerningAdvance(self: *Font, char_pair: [2]u21) !i32 {
     }
     return entry.value_ptr.*;
 }
-
-/// wrapper for `std.unicode.utf8ValidateSlice` with early-out
-/// optimization for slices that only contains ASCII
-// TODO: fully implement this using SIMD, theres a bunch of papers online on how to do that
-fn utf8Validate(str: []const u8) bool {
-    const vec_size = comptime std.simd.suggestVectorLength(u8) orelse 64 / 8;
-    const V = @Vector(vec_size, u8);
-    // TODO: make this better
-    var chunk_start: usize = 0;
-    while (chunk_start < str.len) {
-        const rest_of_str = str[chunk_start..];
-
-        // TODO: we can prob. fill this in a smarted way without if/else, just a single @max
-        const chunk: V = if (rest_of_str.len < vec_size) chunk: {
-            var chunk: V = @splat(0);
-            for (rest_of_str, 0..) |char, idx| chunk[idx] = char;
-            break :chunk chunk;
-        } else str[chunk_start..][0..vec_size].*;
-
-        const topbit: V = @splat(0x80);
-        _ = topbit;
-
-        const any_non_ascii = @reduce(.Or, chunk & @as(V, @splat(0x80)) != @as(V, @splat(0)));
-        if (any_non_ascii) {
-            break;
-        } else {
-            chunk_start += vec_size;
-        }
-    }
-
-    if (chunk_start > str.len) {
-        return true;
-    } else {
-        return std.unicode.utf8ValidateSlice(str[chunk_start..]);
-    }
-}
-
-// TODO: also implement SIMD accelerated utf8 decoding
