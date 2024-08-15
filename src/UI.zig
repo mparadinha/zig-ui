@@ -620,7 +620,7 @@ pub fn addNodeRawStrings(
 
     const arena = self.build_arena.allocator();
 
-    const display_str = if (flags.draw_text) display_str_in else &[0]u8{};
+    const display_str = if (flags.draw_text) try arena.dupe(u8, display_str_in) else &[0]u8{};
     const hash_str = if (flags.no_id) blk: {
         // for `no_id` nodes we use a random number as the hash string, so they don't clobber each other
         break :blk &randomArray(&self.prng);
@@ -670,7 +670,7 @@ pub fn addNodeRawStrings(
     if (flags.interactive() and flags.no_id)
         std.debug.panic("conflicting flags: `no_id` nodes can't be interacted with:\n{}\n", .{flags});
     node.flags = flags;
-    node.display_string = try arena.dupe(u8, display_str);
+    node.display_string = display_str;
     node.key = node_key;
     const style = self.style_stack.top().?;
     inline for (@typeInfo(Style).Struct.fields) |field_type_info| {
@@ -1562,11 +1562,7 @@ pub const FontCache = struct {
     quad_cache: QuadCache,
     frame_idx: usize,
 
-    // TODO: font building is bottlenecked on alloc of quad buffer because our
-    // test case have new buffers each frame. maybe use an arena for the allocs
-    // and 'promote' quad bufs to permanent cache after X amount of frames in the
-    // arena pool?
-    arena: std.heap.ArenaAllocator,
+    arenas: [2]std.heap.ArenaAllocator,
 
     pub const RasterData = struct {
         rect: Rect,
@@ -1582,6 +1578,7 @@ pub const FontCache = struct {
     pub const CacheValue = struct {
         raster_data: RasterData,
         permanent_cache: bool,
+        first_frame_touched: usize,
         last_frame_touched: usize,
     };
 
@@ -1594,7 +1591,10 @@ pub const FontCache = struct {
             .icon = try Font.fromTTF(allocator, font_opts.icon_font_path),
             .quad_cache = .{},
             .frame_idx = 0,
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arenas = [2]std.heap.ArenaAllocator{
+                std.heap.ArenaAllocator.init(allocator),
+                std.heap.ArenaAllocator.init(allocator),
+            },
         };
     }
 
@@ -1607,7 +1607,7 @@ pub const FontCache = struct {
         while (cache_it.next()) |entry| {
             if (entry.value.permanent_cache) self.allocator.free(entry.value.raster_data.quads);
         }
-        self.arena.deinit();
+        for (self.arenas) |arena| arena.deinit();
     }
 
     pub fn getFont(self: *FontCache, font_type: FontType) *Font {
@@ -1629,9 +1629,9 @@ pub const FontCache = struct {
         font_type: FontType,
         font_size: f32,
     ) !RasterData {
-        prof.startZoneN("FontCache.buildText");
+        prof.startZoneN("FontCache." ++ @src().fn_name);
         defer prof.stopZone();
-        const arena = self.arena.allocator();
+        const arena = self.arenas[self.frame_idx % self.arenas.len].allocator();
         const entry = .{
             .str_hash = std.hash.Wyhash.hash(0, str),
             .font_type = font_type,
@@ -1645,6 +1645,7 @@ pub const FontCache = struct {
         if (!gop.found_existing) {
             cached_data.raster_data = try self.buildCacheData(arena, str, font_type, font_size);
             cached_data.permanent_cache = false;
+            cached_data.first_frame_touched = self.frame_idx;
         }
         cached_data.last_frame_touched = self.frame_idx;
         return cached_data.raster_data;
@@ -1657,7 +1658,7 @@ pub const FontCache = struct {
         font_type: FontType,
         font_size: f32,
     ) !RasterData {
-        prof.startZoneN("FontCache.buildCacheData");
+        prof.startZoneN("FontCache." ++ @src().fn_name);
         defer prof.stopZone();
         const font = self.getFont(font_type);
         const quads = try font.buildTextAt(allocator, str, font_size, vec2{ 0, 0 });
@@ -1677,29 +1678,37 @@ pub const FontCache = struct {
 
     /// Remove all cache entries that weren't touched last frame.
     pub fn prune(self: *FontCache, current_frame_idx: usize) !void {
+        prof.startZoneN("FontCache." ++ @src().fn_name);
+        defer prof.stopZone();
+
         var cache_it = self.quad_cache.iterator();
         while (cache_it.next()) |entry| {
-            const is_stale = entry.value.last_frame_touched < self.frame_idx;
+            const is_new = entry.value.first_frame_touched == self.frame_idx;
+            const is_unused = entry.value.last_frame_touched < self.frame_idx;
 
             // remove stale entry
-            if (is_stale) {
+            if (is_unused and !is_new) {
                 if (entry.value.permanent_cache) self.allocator.free(entry.value.raster_data.quads);
                 cache_it.remove();
             }
 
-            // promote used entries things to permanent cache
-            if (!is_stale and !entry.value.permanent_cache) {
+            // promote used entries to permanent cache
+            if (!is_unused and !is_new and !entry.value.permanent_cache) {
                 entry.value.permanent_cache = true;
                 // 'move' the allocation from the arena to 'self.allocator'
+                prof.startZoneN("move cached font data");
                 entry.value.raster_data.quads = try self.allocator.dupe(Font.Quad, entry.value.raster_data.quads);
+                prof.stopZone();
             }
         }
 
+        // 'start' new frame
+        self.frame_idx = current_frame_idx;
+
         // everything that remains in the arena now are stale entries
         // that only got used once in the same frame they were created
-        _ = self.arena.reset(.retain_capacity);
-
-        self.frame_idx = current_frame_idx;
+        const next_arena = &self.arenas[self.frame_idx % self.arenas.len];
+        _ = next_arena.reset(.retain_capacity);
     }
 };
 
