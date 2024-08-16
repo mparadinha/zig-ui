@@ -7,7 +7,7 @@ const vec4 = zig_ui.vec4;
 const uvec2 = zig_ui.uvec2;
 const glfw = zig_ui.glfw;
 
-const prof = &@import("root").prof;
+const prof = if (@import("profiler.zig").root_has_prof) &@import("root").prof else &@import("profiler.zig").dummy;
 
 const Window = @This();
 

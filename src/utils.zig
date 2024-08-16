@@ -1,10 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const zig_ui = @import("../zig_ui.zig");
+const vec3 = zig_ui.vec3;
 const vec4 = zig_ui.vec4;
 const uvec4 = zig_ui.uvec4;
 
-const prof = &@import("root").prof;
+const prof = if (@import("profiler.zig").root_has_prof) &@import("root").prof else &@import("profiler.zig").dummy;
 
 pub fn colorFromRGB(r: u8, g: u8, b: u8) vec4 {
     return colorFromRGBA(r, g, b, 0xff);
@@ -12,6 +13,71 @@ pub fn colorFromRGB(r: u8, g: u8, b: u8) vec4 {
 
 pub fn colorFromRGBA(r: u8, g: u8, b: u8, a: u8) vec4 {
     return @as(vec4, @floatFromInt(uvec4{ r, g, b, a })) / @as(vec4, @splat(255));
+}
+
+pub fn RGBtoHSV(rgba: vec4) vec4 {
+    const r = rgba[0];
+    const g = rgba[1];
+    const b = rgba[2];
+    const x_max = @max(r, g, b);
+    const x_min = @min(r, g, b);
+    const V = x_max;
+    const C = x_max - x_min;
+    const H = if (C == 0)
+        0
+    else if (V == r)
+        60 * @mod((g - b) / C, 6)
+    else if (V == g)
+        60 * (((b - r) / C) + 2)
+    else if (V == b)
+        60 * (((r - g) / C) + 4)
+    else
+        unreachable;
+    const S_V = if (V == 0) 0 else C / V;
+
+    return vec4{
+        H / 360,
+        S_V,
+        V,
+        rgba[3],
+    };
+}
+
+pub fn HSVtoRGB(hsva: vec4) vec4 {
+    const h = (hsva[0] * 360) / 60;
+    const C = hsva[2] * hsva[1];
+    const X = C * (1 - @abs(@mod(h, 2) - 1));
+    const rgb_l = switch (@as(u32, @intFromFloat(@floor(h)))) {
+        0 => vec3{ C, X, 0 },
+        1 => vec3{ X, C, 0 },
+        2 => vec3{ 0, C, X },
+        3 => vec3{ 0, X, C },
+        4 => vec3{ X, 0, C },
+        else => vec3{ C, 0, X },
+    };
+    const m = hsva[2] - C;
+    return vec4{
+        rgb_l[0] + m,
+        rgb_l[1] + m,
+        rgb_l[2] + m,
+        hsva[3],
+    };
+}
+
+pub fn castWrappedAdd(src: usize, diff: isize) usize {
+    const new_src = @as(isize, @intCast(src)) + diff;
+    return @intCast(@max(0, new_src));
+}
+
+pub fn castAndSub(comptime T: type, a: anytype, b: anytype) T {
+    return @as(T, @intCast(a)) - @as(T, @intCast(b));
+}
+
+pub fn sliceAsBytes(comptime T: type, slice: []const T) []const u8 {
+    var bytes: []const u8 = undefined;
+    bytes.ptr = @ptrCast(slice.ptr);
+    bytes.len = slice.len * @sizeOf(T);
+    return bytes;
 }
 
 pub fn reduceSlice(comptime T: type, comptime op: std.builtin.ReduceOp, values: []const T) T {
@@ -70,12 +136,14 @@ pub fn binOpSlices(comptime T: type, comptime op: BinOp, dst: []T, lhs: []const 
         dst[idx..][0..Len].* = vec_result;
         idx += Len;
     }
-    for (dst[idx..]) |*v| v.* = switch (op) {
-        .Add => lhs[idx] + rhs[idx],
-        .Sub => lhs[idx] - rhs[idx],
-        .Mul => lhs[idx] * rhs[idx],
-        .Div => lhs[idx] / rhs[idx],
-    };
+    while (idx < dst.len) : (idx += 1) {
+        dst[idx] = switch (op) {
+            .Add => lhs[idx] + rhs[idx],
+            .Sub => lhs[idx] - rhs[idx],
+            .Mul => lhs[idx] * rhs[idx],
+            .Div => lhs[idx] / rhs[idx],
+        };
+    }
 }
 
 /// note: Not all objects are guaranteed to have unique memory representations.

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const clamp = std.math.clamp;
+
 const zig_ui = @import("../zig_ui.zig");
 const vec2 = zig_ui.vec2;
 const vec3 = zig_ui.vec3;
@@ -13,7 +14,7 @@ const utils = @import("utils.zig");
 
 const build_opts = @import("build_opts");
 
-const prof = &@import("root").prof;
+const prof = if (@import("profiler.zig").root_has_prof) &@import("root").prof else &@import("profiler.zig").dummy;
 
 const UI = @This();
 pub usingnamespace @import("widgets.zig");
@@ -29,6 +30,7 @@ allocator: Allocator,
 generic_shader: gfx.Shader,
 font_cache: FontCache,
 build_arena: std.heap.ArenaAllocator,
+build_arena_reset_mode: std.heap.ArenaAllocator.ResetMode,
 node_table: NodeTable,
 prng: PRNG,
 
@@ -71,12 +73,6 @@ text_padding: vec2,
 
 const NodeKey = NodeTable.Hash;
 
-pub const FontOptions = struct {
-    font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Regular.ttf",
-    bold_font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Bold.ttf",
-    italic_font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Oblique.ttf",
-    icon_font_path: []const u8 = build_opts.resource_dir ++ "/icons.ttf",
-};
 // icon font (and this mapping) was generated using fontello.com
 pub const Icons = struct {
     // zig fmt: off
@@ -95,107 +91,6 @@ pub const Icons = struct {
     pub const minus_squared = "\u{f146}";
     pub const plus =          "\u{e80a}";
     // zig fmt: on
-};
-
-// call `deinit` to cleanup resources
-pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
-    return UI{
-        .allocator = allocator,
-        .generic_shader = gfx.Shader.from_srcs(allocator, "ui_generic", .{
-            .vertex = @embedFile("shader.vert"),
-            .geometry = @embedFile("shader.geom"),
-            .fragment = @embedFile("shader.frag"),
-        }) catch unreachable,
-        .font_cache = try FontCache.init(allocator, font_opts),
-        .build_arena = std.heap.ArenaAllocator.init(allocator),
-        .node_table = NodeTable.init(allocator),
-        .prng = .{ .state = 0 },
-
-        .node_keys_this_frame = std.AutoHashMap(NodeKey, void).init(allocator),
-
-        .first_error_trace = null,
-        .first_error_name = "",
-        .first_error_stack_trace = undefined,
-
-        .base_style = Style{},
-
-        .parent_stack = Stack(*Node).init(allocator),
-        .style_stack = Stack(Style).init(allocator),
-        .auto_pop_style = false,
-        .root = null,
-        .tooltip_root = null,
-        .ctx_menu_root = null,
-        .window_roots = std.ArrayList(*Node).init(allocator),
-        .screen_size = undefined,
-        .mouse_pos = undefined,
-        .events = undefined,
-        .some_node_is_hovered = false,
-
-        .frame_idx = 0,
-        .hot_node_key = null,
-        .active_node_key = null,
-        .focused_node_key = null,
-
-        .text_padding = vec2{ 4, 4 },
-    };
-}
-
-pub fn deinit(self: *UI) void {
-    self.style_stack.deinit();
-    self.parent_stack.deinit();
-    self.node_table.deinit();
-    self.build_arena.deinit();
-    self.font_cache.deinit();
-    self.generic_shader.deinit();
-    self.window_roots.deinit();
-    self.node_keys_this_frame.deinit();
-}
-
-pub const Flags = packed struct {
-    // interactivity flags
-    clickable: bool = false,
-    selectable: bool = false, // maintains focus when clicked
-    toggleable: bool = false, // like `clickable` but `Signal.toggled` is also used
-    scroll_children_x: bool = false,
-    scroll_children_y: bool = false,
-
-    // rendering flags
-    clip_children: bool = false,
-    draw_text: bool = false,
-    draw_border: bool = false,
-    draw_background: bool = false,
-    draw_hot_effects: bool = false,
-    draw_active_effects: bool = false,
-    disable_text_truncation: bool = false,
-
-    // layout flags
-    // a floating node is not taken into account in the normal layout
-    floating_x: bool = false,
-    floating_y: bool = false,
-
-    // special flags
-    no_id: bool = false, // node gets assigned a random hash, not related to any string
-    ignore_hash_sep: bool = false, // don't treat '###' as the special display/hash separator
-
-    pub fn interactive(self: Flags) bool {
-        return self.clickable or
-            self.selectable or
-            self.toggleable or
-            self.scroll_children_x or
-            self.scroll_children_y;
-    }
-
-    const Int = @typeInfo(@This()).Struct.backing_integer.?;
-
-    pub fn @"and"(self: Flags, other: Flags) Flags {
-        return @bitCast(@as(Int, @bitCast(self)) & @as(Int, @bitCast(other)));
-    }
-    pub fn @"or"(self: Flags, other: Flags) Flags {
-        return @bitCast(@as(Int, @bitCast(self)) | @as(Int, @bitCast(other)));
-    }
-    pub fn not(self: Flags) Flags {
-        return @bitCast(~@as(Int, @bitCast(self)));
-    }
 };
 
 pub const Node = struct {
@@ -261,6 +156,53 @@ pub const Node = struct {
     last_double_click_time: f32, // used for triple click checks
     scroll_offset: vec2,
     toggled: bool, // used for collapsible tree node
+};
+
+pub const Flags = packed struct {
+    // interactivity flags
+    clickable: bool = false,
+    selectable: bool = false, // maintains focus when clicked
+    toggleable: bool = false, // like `clickable` but `Signal.toggled` is also used
+    scroll_children_x: bool = false,
+    scroll_children_y: bool = false,
+
+    // rendering flags
+    clip_children: bool = false,
+    draw_text: bool = false,
+    draw_border: bool = false,
+    draw_background: bool = false,
+    draw_hot_effects: bool = false,
+    draw_active_effects: bool = false,
+    disable_text_truncation: bool = false,
+
+    // layout flags
+    // a floating node is not taken into account in the normal layout
+    floating_x: bool = false,
+    floating_y: bool = false,
+
+    // special flags
+    no_id: bool = false, // node gets assigned a random hash, not related to any string
+    ignore_hash_sep: bool = false, // don't treat '###' as the special display/hash separator
+
+    pub fn interactive(self: Flags) bool {
+        return self.clickable or
+            self.selectable or
+            self.toggleable or
+            self.scroll_children_x or
+            self.scroll_children_y;
+    }
+
+    const Int = @typeInfo(@This()).Struct.backing_integer.?;
+
+    pub fn @"and"(self: Flags, other: Flags) Flags {
+        return @bitCast(@as(Int, @bitCast(self)) & @as(Int, @bitCast(other)));
+    }
+    pub fn @"or"(self: Flags, other: Flags) Flags {
+        return @bitCast(@as(Int, @bitCast(self)) | @as(Int, @bitCast(other)));
+    }
+    pub fn not(self: Flags) Flags {
+        return @bitCast(~@as(Int, @bitCast(self)));
+    }
 };
 
 pub const CustomDrawFn = *const fn (
@@ -329,6 +271,9 @@ pub const Size = union(enum) {
     }
 
     pub const children2 = fillByChildren;
+    pub fn text2(x_strictness: f32, y_strictness: f32) [2]Size {
+        return [2]Size{ Size.text(x_strictness), Size.text(y_strictness) };
+    }
 
     pub fn exact(tag: Tag, x: f32, y: f32) [2]Size {
         return switch (tag) {
@@ -566,6 +511,68 @@ pub const Signal = struct {
     }
 };
 
+pub const FontOptions = struct {
+    font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Regular.ttf",
+    bold_font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Bold.ttf",
+    italic_font_path: []const u8 = build_opts.resource_dir ++ "/VictorMono-Oblique.ttf",
+    icon_font_path: []const u8 = build_opts.resource_dir ++ "/icons.ttf",
+};
+
+// call `deinit` to cleanup resources
+pub fn init(allocator: Allocator, font_opts: FontOptions) !UI {
+    return UI{
+        .allocator = allocator,
+        .generic_shader = gfx.Shader.from_srcs(allocator, "ui_generic", .{
+            .vertex = @embedFile("shader.vert"),
+            .geometry = @embedFile("shader.geom"),
+            .fragment = @embedFile("shader.frag"),
+        }) catch unreachable,
+        .font_cache = try FontCache.init(allocator, font_opts),
+        .build_arena = std.heap.ArenaAllocator.init(allocator),
+        .build_arena_reset_mode = .retain_capacity,
+        .node_table = NodeTable.init(allocator),
+        .prng = .{ .state = 0 },
+
+        .node_keys_this_frame = std.AutoHashMap(NodeKey, void).init(allocator),
+
+        .first_error_trace = null,
+        .first_error_name = "",
+        .first_error_stack_trace = undefined,
+
+        .base_style = Style{},
+
+        .parent_stack = Stack(*Node).init(allocator),
+        .style_stack = Stack(Style).init(allocator),
+        .auto_pop_style = false,
+        .root = null,
+        .tooltip_root = null,
+        .ctx_menu_root = null,
+        .window_roots = std.ArrayList(*Node).init(allocator),
+        .screen_size = undefined,
+        .mouse_pos = undefined,
+        .events = undefined,
+        .some_node_is_hovered = false,
+
+        .frame_idx = 0,
+        .hot_node_key = null,
+        .active_node_key = null,
+        .focused_node_key = null,
+
+        .text_padding = vec2{ 4, 4 },
+    };
+}
+
+pub fn deinit(self: *UI) void {
+    self.style_stack.deinit();
+    self.parent_stack.deinit();
+    self.node_table.deinit();
+    self.build_arena.deinit();
+    self.font_cache.deinit();
+    self.generic_shader.deinit();
+    self.window_roots.deinit();
+    self.node_keys_this_frame.deinit();
+}
+
 pub fn addNode(self: *UI, flags: Flags, string: []const u8, init_args: anytype) *Node {
     const node = self.addNodeRaw(flags, string, init_args) catch |e| blk: {
         self.setErrorInfo(@errorReturnTrace(), @errorName(e));
@@ -574,32 +581,12 @@ pub fn addNode(self: *UI, flags: Flags, string: []const u8, init_args: anytype) 
     return node;
 }
 
-pub fn addNodeF(self: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, init_args: anytype) *Node {
-    const str = self.fmtTmpString(fmt, args);
-    return self.addNode(flags, str, init_args);
-}
-
-// TODO: remove this, use '###' instead?
 pub fn addNodeStrings(self: *UI, flags: Flags, display_string: []const u8, hash_string: []const u8, init_args: anytype) *Node {
     const node = self.addNodeRawStrings(flags, display_string, hash_string, init_args) catch |e| blk: {
         self.setErrorInfo(@errorReturnTrace(), @errorName(e));
         break :blk self.root.?;
     };
     return node;
-}
-
-pub fn addNodeStringsF(
-    self: *UI,
-    flags: Flags,
-    comptime display_fmt: []const u8,
-    display_args: anytype,
-    comptime hash_fmt: []const u8,
-    hash_args: anytype,
-    init_args: anytype,
-) *Node {
-    const display_str = self.fmtTmpString(display_fmt, display_args);
-    const hash_str = self.fmtTmpString(hash_fmt, hash_args);
-    return self.addNodeStrings(flags, display_str, hash_str, init_args);
 }
 
 pub fn addNodeRaw(self: *UI, flags: Flags, string: []const u8, init_args: anytype) !*Node {
@@ -730,6 +717,13 @@ pub fn addNodeAsRoot(self: *UI, flags: Flags, string: []const u8, init_args: any
     return node;
 }
 
+/// Create a new node and immediately push it to the parent stack.
+pub fn addParent(self: *UI, flags: Flags, string: []const u8, init_args: anytype) *Node {
+    const node = self.addNode(flags, string, init_args);
+    self.pushParent(node);
+    return node;
+}
+
 pub fn pushParent(self: *UI, node: *Node) void {
     self.parent_stack.push(node) catch |e|
         self.setErrorInfo(@errorReturnTrace(), @errorName(e));
@@ -798,7 +792,7 @@ pub fn startBuild(
     if (self.root) |node| try self.computeSignalsForTree(node);
 
     // clear out the whole arena
-    _ = self.build_arena.reset(.free_all);
+    _ = self.build_arena.reset(self.build_arena_reset_mode);
 
     self.node_keys_this_frame.clearRetainingCapacity();
 
@@ -1555,10 +1549,9 @@ pub const NodeTable = struct {
 // separate thread
 pub const FontCache = struct {
     allocator: Allocator,
-    regular: Font,
-    bold: Font,
-    italic: Font,
-    icon: Font,
+    // TODO: in the future we can make this dynamic to support an arbitrary number
+    // of fonts provided by the user. for now we can hardcode the size though.
+    fonts: [@typeInfo(FontType).Enum.fields.len]Font,
     quad_cache: QuadCache,
     frame_idx: usize,
 
@@ -1569,7 +1562,7 @@ pub const FontCache = struct {
         quads: []const Font.Quad, // owned by FontCache
     };
 
-    pub const QuadCache = utils.StaticHashTable(CacheKey, CacheValue, 128, 32);
+    pub const QuadCache = utils.StaticHashTable(CacheKey, CacheValue, 64, 8);
     pub const CacheKey = struct {
         str_hash: u64,
         font_type: FontType,
@@ -1585,10 +1578,12 @@ pub const FontCache = struct {
     pub fn init(allocator: Allocator, font_opts: FontOptions) !FontCache {
         return .{
             .allocator = allocator,
-            .regular = try Font.fromTTF(allocator, font_opts.font_path),
-            .bold = try Font.fromTTF(allocator, font_opts.bold_font_path),
-            .italic = try Font.fromTTF(allocator, font_opts.italic_font_path),
-            .icon = try Font.fromTTF(allocator, font_opts.icon_font_path),
+            .fonts = [_]Font{
+                try Font.fromTTF(allocator, font_opts.font_path),
+                try Font.fromTTF(allocator, font_opts.bold_font_path),
+                try Font.fromTTF(allocator, font_opts.italic_font_path),
+                try Font.fromTTF(allocator, font_opts.icon_font_path),
+            },
             .quad_cache = .{},
             .frame_idx = 0,
             .arenas = [2]std.heap.ArenaAllocator{
@@ -1599,24 +1594,23 @@ pub const FontCache = struct {
     }
 
     pub fn deinit(self: *FontCache) void {
-        self.regular.deinit();
-        self.bold.deinit();
-        self.italic.deinit();
-        self.icon.deinit();
+        for (&self.fonts) |*font| font.deinit();
         var cache_it = self.quad_cache.iterator();
         while (cache_it.next()) |entry| {
             if (entry.value.permanent_cache) self.allocator.free(entry.value.raster_data.quads);
         }
+        self.quad_cache.deinit(self.allocator);
         for (self.arenas) |arena| arena.deinit();
     }
 
     pub fn getFont(self: *FontCache, font_type: FontType) *Font {
-        return switch (font_type) {
-            .regular => &self.regular,
-            .bold => &self.bold,
-            .italic => &self.italic,
-            .icon => &self.icon,
+        const font_idx: usize = switch (font_type) {
+            .regular => 0,
+            .bold => 1,
+            .italic => 2,
+            .icon => 3,
         };
+        return &self.fonts[font_idx];
     }
 
     pub fn textRect(self: *FontCache, str: []const u8, font_type: FontType, font_size: f32) !Rect {
@@ -1637,9 +1631,13 @@ pub const FontCache = struct {
             .font_type = font_type,
             .font_size = font_size,
         };
-        const gop = self.quad_cache.getOrPut(entry) catch {
-            // bypass the cache when OOM instead of failing
-            return self.buildCacheData(arena, str, font_type, font_size);
+        const gop = self.quad_cache.getOrPut(entry) catch gop: {
+            // grow cache and try again
+            self.quad_cache.grow(self.allocator) catch {
+                // bypass the cache when OOM instead of failing
+                return self.buildCacheData(arena, str, font_type, font_size);
+            };
+            break :gop self.quad_cache.getOrPut(entry) catch unreachable;
         };
         const cached_data = gop.value;
         if (!gop.found_existing) {
@@ -1661,7 +1659,7 @@ pub const FontCache = struct {
         prof.startZoneN("FontCache." ++ @src().fn_name);
         defer prof.stopZone();
         const font = self.getFont(font_type);
-        const quads = try font.buildTextAt(allocator, str, font_size, vec2{ 0, 0 });
+        const quads = try font.buildText(allocator, str, font_size);
         var tight_rect = Rect{ .min = @splat(std.math.floatMax(f32)), .max = @splat(0) };
         for (quads) |quad| {
             tight_rect.min = @min(tight_rect.min, quad.points[0].pos);
@@ -2029,4 +2027,23 @@ pub fn printNode(node: *const Node) void {
             else => std.debug.print("{s}: {any}\n", .{ field.name, value }),
         }
     }
+}
+
+// format string version of node creation functions
+pub fn addNodeF(self: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, init_args: anytype) *Node {
+    const str = self.fmtTmpString(fmt, args);
+    return self.addNode(flags, str, init_args);
+}
+pub fn addNodeStringsF(self: *UI, flags: Flags, comptime display_fmt: []const u8, display_args: anytype, comptime hash_fmt: []const u8, hash_args: anytype, init_args: anytype) *Node {
+    const display_str = self.fmtTmpString(display_fmt, display_args);
+    const hash_str = self.fmtTmpString(hash_fmt, hash_args);
+    return self.addNodeStrings(flags, display_str, hash_str, init_args);
+}
+pub fn addNodeAsRootF(self: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, init_args: anytype) *Node {
+    const str = self.fmtTmpString(fmt, args);
+    return self.addNodeAsRoot(flags, str, init_args);
+}
+pub fn addParentF(self: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, init_args: anytype) *Node {
+    const str = self.fmtTmpString(fmt, args);
+    return self.addParent(flags, str, init_args);
 }

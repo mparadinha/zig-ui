@@ -1,18 +1,20 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const zig_ui = @import("../zig_ui.zig");
-const gl = zig_ui.gl;
-const gfx = zig_ui.gfx;
-const utils = zig_ui.utils;
-const vec2 = zig_ui.vec2;
-const uvec2 = zig_ui.uvec2;
-const ivec2 = zig_ui.ivec2;
+
 const c = @cImport({
     @cInclude("stb_rect_pack.h");
     @cInclude("stb_truetype.h");
 });
 
-const prof = &@import("root").prof;
+const zig_ui = @import("../zig_ui.zig");
+const gl = zig_ui.gl;
+const vec2 = zig_ui.vec2;
+const uvec2 = zig_ui.uvec2;
+const ivec2 = zig_ui.ivec2;
+const gfx = @import("graphics.zig");
+const utils = @import("utils.zig");
+
+const prof = if (@import("profiler.zig").root_has_prof) &@import("root").prof else &@import("profiler.zig").dummy;
 
 const Font = @This();
 
@@ -95,22 +97,20 @@ pub const Quad = extern struct {
     const Vertex = packed struct { pos: vec2, uv: vec2 };
 };
 
-/// Caller owns returned memory
-pub fn buildTextAt(
+/// Quad data uses (0, 0) as starting cursor. Caller owns returned memory.
+pub fn buildText(
     self: *Font,
     allocator: Allocator,
     str: []const u8,
     pixel_size: f32,
-    start_pos: vec2,
 ) ![]Quad {
     prof.startZoneN("Font." ++ @src().fn_name);
     defer prof.stopZone();
 
     const metrics = self.getScaledMetrics(pixel_size);
-
     var quads = try std.ArrayList(Quad).initCapacity(allocator, str.len);
 
-    var cursor = start_pos;
+    var cursor = vec2{ 0, 0 };
 
     var utf8_iter = utils.Utf8Iterator{ .bytes = str };
     while (utf8_iter.next()) |codepoint| {
@@ -118,7 +118,7 @@ pub fn buildTextAt(
 
         if (codepoint == '\n') {
             if (next_codepoint != null) {
-                cursor[0] = start_pos[0];
+                cursor[0] = 0;
                 cursor[1] -= metrics.line_advance; // stb uses +y up
             }
             continue;

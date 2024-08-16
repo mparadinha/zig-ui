@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const zig_ui = @import("../zig_ui.zig");
 const gl = zig_ui.gl;
 const vec2 = zig_ui.vec2;
@@ -9,9 +10,10 @@ const Rect = UI.Rect;
 const FontType = UI.FontType;
 const Font = @import("Font.zig");
 const gfx = @import("graphics.zig");
+const utils = zig_ui.utils;
 const indexOfNthScalar = UI.indexOfNthScalar;
 
-const prof = &@import("root").prof;
+const prof = if (@import("profiler.zig").root_has_prof) &@import("root").prof else &@import("profiler.zig").dummy;
 
 pub var hot_reload_shaders: bool = false;
 pub var hot_reload_frame_interval: usize = 10;
@@ -79,61 +81,42 @@ pub const ShaderInput = extern struct {
 };
 
 pub fn render(self: *UI) !void {
-    prof.startZoneN("UI.render");
+    prof.startZoneN("UI." ++ @src().fn_name);
     defer prof.stopZone();
 
     const arena = self.build_arena.allocator();
+
+    prof.startZoneN("UI." ++ @src().fn_name ++ ": estimate #inputs");
     var estimated_rect_count = self.node_table.count() * 2;
     var node_it = self.node_table.valueIterator();
     while (node_it.next()) |node| estimated_rect_count += node.display_string.len;
+    prof.stopZone();
+    prof.startZoneN("UI." ++ @src().fn_name ++ ": pre-alloc inputs");
     var shader_inputs = try std.ArrayList(ShaderInput).initCapacity(arena, estimated_rect_count);
+    prof.stopZone();
 
+    prof.startZoneN("UI." ++ @src().fn_name ++ ": setup shader inputs");
     try setupTreeForRender(self, &shader_inputs, self.root.?);
     for (self.window_roots.items) |node| try setupTreeForRender(self, &shader_inputs, node);
     if (self.ctx_menu_root) |node| try setupTreeForRender(self, &shader_inputs, node);
     if (self.tooltip_root) |node| try setupTreeForRender(self, &shader_inputs, node);
+    prof.stopZone();
 
     // create vertex buffer
-    var inputs_vao: u32 = 0;
-    gl.genVertexArrays(1, &inputs_vao);
-    defer gl.deleteVertexArrays(1, &inputs_vao);
-    gl.bindVertexArray(inputs_vao);
-    var inputs_vbo: u32 = 0;
-    gl.genBuffers(1, &inputs_vbo);
-    defer gl.deleteBuffers(1, &inputs_vbo);
-    gl.bindBuffer(gl.ARRAY_BUFFER, inputs_vbo);
-    const stride = @sizeOf(ShaderInput);
-    gl.bufferData(gl.ARRAY_BUFFER, @as(isize, @intCast(shader_inputs.items.len * stride)), shader_inputs.items.ptr, gl.STATIC_DRAW);
-    var field_offset: usize = 0;
-    inline for (@typeInfo(ShaderInput).Struct.fields, 0..) |field, i| {
-        const elems = switch (@typeInfo(field.type)) {
-            .Float, .Int => 1,
-            .Array => |array| array.len,
-            else => @compileError("new type in ShaderInput struct: " ++ @typeName(field.type)),
-        };
-        const child_type = switch (@typeInfo(field.type)) {
-            .Array => |array| array.child,
-            else => field.type,
-        };
-
-        const offset_ptr = if (field_offset == 0) null else @as(*const anyopaque, @ptrFromInt(field_offset));
-        switch (@typeInfo(child_type)) {
-            .Float => {
-                const gl_type = gl.FLOAT;
-                gl.vertexAttribPointer(i, elems, gl_type, gl.FALSE, stride, offset_ptr);
-            },
-            .Int => {
-                const type_info = @typeInfo(child_type).Int;
-                std.debug.assert(type_info.signedness == .unsigned);
-                std.debug.assert(type_info.bits == 32);
-                const gl_type = gl.UNSIGNED_INT;
-                gl.vertexAttribIPointer(i, elems, gl_type, stride, offset_ptr);
-            },
-            else => @compileError("new type in ShaderInput struct: " ++ @typeName(child_type)),
+    prof.startZoneN("UI." ++ @src().fn_name ++ ": create vert. buf.");
+    const attribs = blk: {
+        const Attrib = gfx.VertexBuffer.Attrib;
+        const input_fields = @typeInfo(ShaderInput).Struct.fields;
+        var attribs: [input_fields.len]Attrib = undefined;
+        inline for (input_fields, 0..) |field, i| {
+            attribs[i] = gfx.VertexBuffer.Attrib.fromType(field.type);
         }
-        gl.enableVertexAttribArray(i);
-        field_offset += @sizeOf(field.type);
-    }
+        break :blk attribs;
+    };
+    const vertex_data = gfx.VertexBuffer.init(&attribs, shader_inputs.items.len);
+    defer vertex_data.deinit();
+    vertex_data.update(utils.sliceAsBytes(ShaderInput, shader_inputs.items));
+    prof.stopZone();
 
     // save current blend state and set it how we need it
     const blend_was_on = gl.isEnabled(gl.BLEND) == gl.TRUE;
@@ -176,6 +159,7 @@ pub fn render(self: *UI) !void {
         self.generic_shader = updated_shader;
     }
 
+    prof.startZoneN("UI." ++ @src().fn_name ++ ": draw");
     self.generic_shader.bind();
     self.generic_shader.set("screen_size", self.screen_size);
     inline for (@typeInfo(FontType).Enum.fields) |field| {
@@ -183,11 +167,13 @@ pub fn render(self: *UI) !void {
         const font = self.font_cache.getFont(@enumFromInt(field.value));
         font.texture.bind(field.value);
     }
-    gl.bindVertexArray(inputs_vao);
-    gl.drawArrays(gl.POINTS, 0, @intCast(shader_inputs.items.len));
+    vertex_data.draw(gl.POINTS);
+    prof.stopZone();
 }
 
 fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), root: *Node) !void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
     var node_iterator = RenderOrderNodeIterator{ .cur_node = root };
     while (node_iterator.next()) |node| {
         try addShaderInputsForNode(self, shader_inputs, node);
@@ -196,9 +182,12 @@ fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), roo
 
 // turn a UI.Node into Shader quads
 fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), node: *Node) !void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
+
     if (node.custom_draw_fn) |draw_fn| return draw_fn(self, shader_inputs, node);
 
-    // // don't bother adding inputs for fully clipped nodes
+    // don't bother adding inputs for fully clipped nodes
     if (node.parent) |parent| {
         const clipped_rect = node.rect.intersection(parent.clip_rect);
         if (@reduce(.Or, clipped_rect.size() == vec2{ 0, 0 })) return;
@@ -258,6 +247,8 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
 
     // draw text
     if (node.flags.draw_text) blk: {
+        prof.startZoneN("UI." ++ @src().fn_name ++ ": draw_text");
+        defer prof.stopZone();
         if (node.display_string.len == 0) break :blk;
 
         const font = self.font_cache.getFont(node.font_type);
@@ -294,20 +285,6 @@ fn addShaderInputsForNode(self: *UI, shader_inputs: *std.ArrayList(ShaderInput),
 
         const show_dbg_rects = false;
         if (show_dbg_rects) {
-            // std.debug.print("needs_truncation: {}\n", .{needs_truncation});
-            // std.debug.print("text_base: {d}\n", .{text_base});
-            // std.debug.print("ellipsis_text_base: {d}\n", .{ellipsis_text_base});
-            // std.debug.print("ellipsis_width: {d}\n", .{ellipsis_width});
-            // std.debug.print("node.parent.?.rect: {d}\n", .{node.parent.?.rect});
-            // std.debug.print("node.parent.?.rect.size(): {d}\n", .{node.parent.?.rect.size()});
-            // std.debug.print("text_info.rect: {d}\n", .{text_info.rect});
-            // std.debug.print("text_info.rect.size(): {d}\n", .{text_info.rect.size()});
-            // std.debug.print("node.rect: {d}\n", .{node.rect});
-            // std.debug.print("node.rect.size(): {d}\n", .{node.rect.size()});
-            // std.debug.print("node_inner_rect: {d}\n", .{node_inner_rect});
-            // std.debug.print("node_inner_rect.size(): {d}\n", .{node_inner_rect.size()});
-            // std.debug.print("ellipsis_text_info.rect: {d}\n", .{ellipsis_text_info.rect});
-            // std.debug.print("ellipsis_text_info.rect.size(): {d}\n", .{ellipsis_text_info.rect.size()});
             try shader_inputs.append(ShaderInput.dbg(
                 ellipsis_text_base + ellipsis_text_info.rect.min,
                 ellipsis_text_base + ellipsis_text_info.rect.max,

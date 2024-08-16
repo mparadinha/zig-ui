@@ -6,58 +6,142 @@ const vec2 = zig_ui.vec2;
 const vec3 = zig_ui.vec3;
 const vec4 = zig_ui.vec4;
 
-pub const Mesh = struct {
+/// Generic GPU geometry buffer.
+pub const VertexBuffer = struct {
     vao: u32,
+    // TODO: multiple VBO with one attribute per VBO instead all attribs in one
     vbo: u32,
-    ebo: u32,
+    // TODO: support index/element buffer
+    elem_size: usize,
+    n_elems: usize,
+    // TODO: support keeping around a (CPU side) copy of the GPU data inside
+    // this data structure instead of outside of it; may be helpfull in some cases.
 
-    n_indices: u16,
+    pub const Attrib = struct {
+        /// gl.FLOAT, etc.
+        type: gl.GLenum,
+        /// e.g. len=2 for vec2
+        len: usize,
 
-    pub const Attrib = struct { n_elems: u32 };
-
-    /// 'deinit' cleans up used resources
-    pub fn init(vert_data: []const f32, indices: []const u32, attribs: []const Attrib) Mesh {
-        var mesh = Mesh{ .vao = 0, .vbo = 0, .ebo = 0, .n_indices = @intCast(indices.len) };
-
-        gl.genVertexArrays(1, &mesh.vao);
-        gl.bindVertexArray(mesh.vao);
-
-        gl.genBuffers(1, &mesh.vbo);
-        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, @intCast(vert_data.len * @sizeOf(f32)), vert_data.ptr, gl.STATIC_DRAW);
-
-        var stride: u32 = 0;
-        for (attribs) |attrib| stride += attrib.n_elems;
-        var offset: u32 = 0;
-        for (attribs, 0..) |attrib, i| {
-            gl.vertexAttribPointer(
-                @intCast(i),
-                @intCast(attrib.n_elems),
-                gl.FLOAT,
-                gl.FALSE,
-                @intCast(stride * @sizeOf(f32)),
-                if (offset == 0) null else @as(*const anyopaque, @ptrFromInt(offset)),
-            );
-            gl.enableVertexAttribArray(@intCast(i));
-            offset += attrib.n_elems * @sizeOf(f32);
+        pub fn size(self: Attrib) usize {
+            return sizeOfGLType(self.type) * self.len;
         }
 
-        gl.genBuffers(1, &mesh.ebo);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.ebo);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(indices.len * @sizeOf(u32)), indices.ptr, gl.STATIC_DRAW);
+        pub fn fromType(comptime T: type) Attrib {
+            return switch (@typeInfo(T)) {
+                .Float => |float| switch (float.bits) {
+                    32 => .{ .type = gl.FLOAT, .len = 1 },
+                    64 => .{ .type = gl.DOUBLE, .len = 1 },
+                    else => @compileError(@typeName(T) ++ " not supported."),
+                },
+                .Int => |int| .{
+                    .type = switch (int.signedness) {
+                        .signed => switch (int.bits) {
+                            8 => gl.BYTE,
+                            16 => gl.SHORT,
+                            32 => gl.INT,
+                            else => @compileError(@typeName(T) ++ " not supported."),
+                        },
+                        .unsigned => switch (int.bits) {
+                            8 => gl.UNSIGNED_BYTE,
+                            16 => gl.UNSIGNED_SHORT,
+                            32 => gl.UNSIGNED_INT,
+                            else => @compileError(@typeName(T) ++ " not supported."),
+                        },
+                    },
+                    .len = 1,
+                },
+                .Array => |array| blk: {
+                    const child = Attrib.fromType(array.child);
+                    break :blk .{ .type = child.type, .len = array.len };
+                },
+                else => @compileError(@typeName(T) ++ " not supported."),
+            };
+        }
+    };
 
-        return mesh;
+    /// Initialize and allocate GPU side buffer
+    pub fn init(
+        attribs: []const Attrib,
+        n_elems: usize,
+        // TODO: support multiple vbos?
+    ) VertexBuffer {
+        const elem_size = blk: {
+            var sum: usize = 0;
+            // TODO: don't assume element attribs are tighly packed?
+            for (attribs) |attrib| sum += attrib.size();
+            break :blk sum;
+        };
+
+        var vao: u32 = 0;
+        gl.genVertexArrays(1, &vao);
+        gl.bindVertexArray(vao);
+
+        var vbo: u32 = 0;
+        gl.genBuffers(1, &vbo);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        var offset: usize = 0;
+        for (attribs, 0..) |attrib, i| {
+            const index: u32 = @intCast(i);
+            const attrib_offset: ?*const anyopaque = if (offset == 0) null else @ptrFromInt(offset);
+            // TODO: don't assume elements are tighly packed?
+            switch (attrib.type) {
+                gl.FLOAT => gl.vertexAttribPointer(index, @intCast(attrib.len), attrib.type, gl.FALSE, @intCast(elem_size), attrib_offset),
+                gl.DOUBLE => gl.vertexAttribLPointer(index, @intCast(attrib.len), attrib.type, @intCast(elem_size), attrib_offset),
+                gl.BYTE,
+                gl.SHORT,
+                gl.INT,
+                gl.UNSIGNED_BYTE,
+                gl.UNSIGNED_SHORT,
+                gl.UNSIGNED_INT,
+                => gl.vertexAttribIPointer(index, @intCast(attrib.len), attrib.type, @intCast(elem_size), attrib_offset),
+                else => |gl_type| std.debug.panic("{}", .{gl_type}),
+            }
+            gl.enableVertexAttribArray(index);
+            // TODO: don't assume element attribs are tighly packed?
+            offset += attrib.size();
+        }
+        // TODO: support gl.STATIC_DRAW as well
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(n_elems * elem_size), null, gl.DYNAMIC_DRAW);
+
+        return .{
+            .vao = vao,
+            .vbo = vbo,
+            .elem_size = elem_size,
+            .n_elems = n_elems,
+        };
     }
 
-    pub fn deinit(self: Mesh) void {
-        gl.deleteVertexArrays(1, &self.vao);
+    pub fn deinit(self: VertexBuffer) void {
         gl.deleteBuffers(1, &self.vbo);
-        gl.deleteBuffers(1, &self.ebo);
+        gl.deleteVertexArrays(1, &self.vao);
     }
 
-    pub fn draw(self: Mesh) void {
+    /// Update buffer data, sync with GPU
+    pub fn update(self: VertexBuffer, data: []const u8) void {
+        std.debug.assert(data.len == self.elem_size * self.n_elems);
+        // TODO: support gl.STATIC_DRAW as well
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(data.len), @ptrCast(data.ptr), gl.DYNAMIC_DRAW);
+    }
+
+    pub fn draw(
+        self: VertexBuffer,
+        /// gl.LINE_STRIP, gl.TRIANGLES, etc.
+        mode: gl.GLenum,
+    ) void {
         gl.bindVertexArray(self.vao);
-        gl.drawElements(gl.TRIANGLES, self.n_indices, gl.UNSIGNED_INT, null);
+        gl.drawArrays(mode, 0, @intCast(self.n_elems));
+    }
+
+    fn sizeOfGLType(gl_type: gl.GLenum) usize {
+        return switch (gl_type) {
+            gl.UNSIGNED_BYTE => @sizeOf(u8),
+            gl.UNSIGNED_SHORT => @sizeOf(u16),
+            gl.UNSIGNED_INT => @sizeOf(u32),
+            gl.FLOAT => @sizeOf(f32),
+            gl.DOUBLE => @sizeOf(f64),
+            else => |todo| std.debug.panic("'type: gl.GLenum = {}' not suppported", .{todo}),
+        };
     }
 };
 

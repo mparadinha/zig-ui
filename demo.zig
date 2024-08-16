@@ -9,8 +9,10 @@ const gfx = zig_ui.gfx;
 const glfw = zig_ui.glfw;
 const Window = zig_ui.Window;
 const UI = zig_ui.UI;
+const utils = zig_ui.utils;
 
-pub var prof = Profiler{};
+pub var prof = zig_ui.Profiler{};
+
 const target_ms_per_frame: f32 = 1.0 / 60.0;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{
@@ -42,7 +44,7 @@ pub fn main() !void {
         .current_tabs = std.ArrayList(usize).init(allocator),
     };
     defer demo.current_tabs.deinit();
-    var show_profiler = true;
+    var show_profiler = false;
     var profiler_graph_rect: UI.Rect = undefined;
 
     var last_time: f32 = @floatCast(glfw.getTime());
@@ -67,7 +69,7 @@ pub fn main() !void {
 
         try ui.startBuild(fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window);
         try showDemo(allocator, &ui, mouse_pos, &window.event_queue, dt, &demo);
-        if (show_profiler) profiler_graph_rect = showProfilerInfo(&ui, &prof);
+        if (show_profiler) profiler_graph_rect = zig_ui.profiler.showProfilerInfo(&ui, &prof);
         ui.endBuild(dt);
 
         if (window.event_queue.searchAndRemove(.KeyDown, .{
@@ -85,7 +87,7 @@ pub fn main() !void {
         try ui.render();
         if (dbg_ui_view.active) try dbg_ui_view.show(&ui, fbsize[0], fbsize[1], mouse_pos, &window.event_queue, &window, dt);
         if (demo.show_zoom) try renderZoomDisplay(allocator, demo, fbsize);
-        if (show_profiler) try renderProfilerGraph(allocator, &prof, profiler_graph_rect, fbsize);
+        if (show_profiler) try zig_ui.profiler.renderProfilerGraph(allocator, &prof, profiler_graph_rect, fbsize, target_ms_per_frame);
 
         // @debug: print info about Node directly under cursor
         if (window.event_queue.searchAndRemove(.KeyDown, .{
@@ -121,7 +123,7 @@ pub fn main() !void {
 
 const DemoState = struct {
     // selected_tab: Tabs = .Basics,
-    selected_tab: Tabs = .@"Perf. testing",
+    selected_tab: Tabs = .Debug,
 
     clear_color: vec4 = vec4{ 0, 0, 0, 0.9 },
     demo_window_bg_color: vec4 = vec4{ 0.2, 0.4, 0.5, 0.5 },
@@ -153,22 +155,20 @@ const DemoState = struct {
         @"Custom Texture",
         @"Perf. testing",
         @"Demo Config",
+        Debug,
     };
 };
 
 const use_child_size = UI.Size.children2(1, 1);
 
 fn showDemo(
-    _: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     ui: *UI,
     mouse_pos: vec2,
     event_q: *Window.EventQueue,
     dt: f32,
     state: *DemoState,
 ) !void {
-    prof.startZoneN("showDemo");
-    defer prof.stopZone();
-
     const demo_p = ui.addNode(.{
         .draw_background = true,
     }, "demo_window", .{
@@ -196,6 +196,7 @@ fn showDemo(
         .Basics => try showDemoTabBasics(ui, state),
         .@"Demo Config" => showDemoTabConfig(ui, state),
         .@"Perf. testing" => showDemoTabPerfTesting(ui, state),
+        .Debug => try showDemoTabDebug(allocator, ui, state),
         else => ui.label("TODO"),
     }
 
@@ -315,7 +316,7 @@ fn showDemo(
             ui.endLine();
         }
 
-        _ = ui.checkBox("Snap to pixel grid", &state.zoom_snap_to_pixel);
+        _ = ui.namedCheckBox("Snap to pixel grid", &state.zoom_snap_to_pixel);
 
         state.zoom_region = state.zoom_region.clamp(os_window_size);
         if (state.zoom_snap_to_pixel) {
@@ -611,23 +612,17 @@ fn showDemoTabBasics(ui: *UI, state: *DemoState) !void {
 }
 
 fn showDemoTabConfig(ui: *UI, state: *DemoState) void {
-    _ = ui.checkBox("Toggle debug stats in the corner", &state.show_debug_stats);
-    _ = ui.checkBox("Hot-reload UI shaders", &UI.hot_reload_shaders);
-    _ = ui.checkBox("Show zoom display", &state.show_zoom);
-    _ = ui.checkBox("Unlock framerate", &state.unlock_framerate);
+    _ = ui.namedCheckBox("Toggle debug stats in the corner", &state.show_debug_stats);
+    _ = ui.namedCheckBox("Hot-reload UI shaders", &UI.hot_reload_shaders);
+    _ = ui.namedCheckBox("Show zoom display", &state.show_zoom);
+    _ = ui.namedCheckBox("Unlock framerate", &state.unlock_framerate);
 }
 
 fn showDemoTabPerfTesting(ui: *UI, state: *DemoState) void {
-    _ = ui.checkBox("Scale dummy label count to target 60fps", &state.auto_scale_dummy_labels);
-    if (state.auto_scale_dummy_labels) {
-        if (prof.frame_idx > 0) {
-            const dt_diff = prof.frame_times[prof.frame_idx - 1] - target_ms_per_frame;
-            if (dt_diff > 0.001) state.dummy_labels -= 1;
-            if (dt_diff < -0.001) state.dummy_labels += 1;
-        }
-    } else {
+    {
         ui.startLine();
         defer ui.endLine();
+
         ui.labelF("{: >4}", .{state.dummy_labels});
         const slider_size = [2]UI.Size{ UI.Size.em(50, 1), UI.Size.em(1, 1) };
         ui.slider(usize, "dummy_label_slider", slider_size, &state.dummy_labels, 0, 5000);
@@ -635,8 +630,40 @@ fn showDemoTabPerfTesting(ui: *UI, state: *DemoState) void {
     if (ui.toggleButton("Static labels", false).toggled) {
         for (0..state.dummy_labels) |idx| ui.labelF("label #{}", .{idx});
     }
-    if (ui.toggleButton("Dynamic labels", true).toggled) {
+    if (ui.toggleButton("Dynamic labels", false).toggled) {
         for (0..state.dummy_labels) |idx| ui.labelF("label #{}: frame_idx+label_idx={}", .{ idx, idx + ui.frame_idx });
+    }
+    if (ui.toggleButton("Fill screen with random text", false).toggled) {
+        var prng = UI.PRNG{ .state = ui.frame_idx };
+        _ = prng.next();
+        for (0..40) |_| {
+            ui.startLine();
+            for (0..15) |_| ui.labelF("{x:0>16}", .{prng.next()});
+            ui.endLine();
+        }
+    }
+}
+
+fn showDemoTabDebug(allocator: std.mem.Allocator, ui: *UI, _: *DemoState) !void {
+    const font = ui.font_cache.getFont(.regular);
+    const str = "! !";
+    ui.labelF("str: '{s}'", .{str});
+    const quads = try font.buildText(allocator, str, 18);
+    defer allocator.free(quads);
+    for (quads, 0..) |quad, q_idx| {
+        ui.labelF("quad for '{c}':", .{str[q_idx]});
+        for (quad.points, 0..) |point, p_idx| ui.labelF("  points[{}]: pos={d}, uv={d}", .{ p_idx, point.pos, point.uv });
+    }
+    for (' '..'~' + 1) |char| {
+        const glyph = try font.getGlyphRasterData(@intCast(char), 18);
+        ui.labelF("'{c}' pos_bl={d}, pos_tr={d}, uv_bl={d}, uv_tr={d}, advance={d}", .{
+            @as(u8, @intCast(char)),
+            glyph.pos_btm_left,
+            glyph.pos_top_right,
+            glyph.uv_btm_left,
+            glyph.uv_top_right,
+            glyph.advance,
+        });
     }
 }
 
@@ -652,36 +679,24 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
             .vertex = "test_zoom.vert",
             .fragment = "test_zoom.frag",
         }) catch break :blk;
-        // const tex_quad_shader = try gfx.Shader.from_srcs(allocator, "textured_quad", .{
-        //     .vertex =
-        //     \\#version 330 core
-        //     \\layout (location = 0) in vec2 in_pos;
-        //     \\uniform vec2 size;
-        //     \\uniform vec2 btm_left;
-        //     \\uniform vec2 uv_size;
-        //     \\uniform vec2 uv_btm_left;
-        //     \\out vec2 pass_uv;
-        //     \\void main() {
-        //     \\    gl_Position = vec4((in_pos * size) + btm_left, 0, 1);
-        //     \\    pass_uv = (in_pos * uv_size) + uv_btm_left;
-        //     \\}
-        //     ,
-        //     .fragment =
-        //     \\#version 330 core
-        //     \\in vec2 pass_uv;
-        //     \\uniform sampler2D img;
-        //     \\out vec4 color;
-        //     \\void main() { color = vec4(texture(img, pass_uv).rgb, 1); }
-        //     ,
-        // });
         defer tex_quad_shader.deinit();
         // TODO: just recreate mesh every frame and use the vert data instead of all those uniforms
-        const tex_quad_mesh = gfx.Mesh.init(
-            &.{ 0, 0, 1, 0, 1, 1, 0, 1 },
-            &.{ 0, 1, 2, 0, 2, 3 },
-            &.{.{ .n_elems = 2 }},
-        );
+
+        const tex_quad_mesh_data = [_]f32{
+            // 1st tri
+            0, 0, // btm left
+            1, 0, // btm right
+            1, 1, // top right
+            // 2nd tri
+            0, 0, // btm left
+            1, 1, // top right
+            0, 1, // top left
+        };
+        const tex_quad_mesh = gfx.VertexBuffer.init(&.{
+            .{ .type = gl.FLOAT, .len = 2 },
+        }, 2);
         defer tex_quad_mesh.deinit();
+        tex_quad_mesh.update(utils.sliceAsBytes(f32, &tex_quad_mesh_data));
 
         var tex_quad_tex = gfx.Texture.init(fbsize[0], fbsize[1], gl.RGBA, bytes, gl.TEXTURE_2D, &.{
             .{ .name = gl.TEXTURE_MIN_FILTER, .value = gl.LINEAR },
@@ -697,7 +712,7 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
         tex_quad_shader.set("display_btm_left", demo.zoom_display.min);
         tex_quad_shader.set("img", @as(i32, 0));
         tex_quad_tex.bind(0);
-        tex_quad_mesh.draw();
+        tex_quad_mesh.draw(gl.TRIANGLES);
     }
 
     if (save_screenshot) {
@@ -721,738 +736,3 @@ fn renderZoomDisplay(allocator: Allocator, demo: DemoState, fbsize: uvec2) !void
         std.debug.print("saved screenshot to 'screenshot.ppm'\n", .{});
     }
 }
-
-const StaticHashTable = zig_ui.utils.StaticHashTable;
-const reduceSlice = zig_ui.utils.reduceSlice;
-const binOpSlices = zig_ui.utils.binOpSlices;
-
-pub const Profiler = struct {
-    zone_table: ZoneTable = .{},
-    zone_stack: std.BoundedArray(*Zone, max_zone_nesting) = .{},
-    frame_times: [Zone.number_of_samples]f32 = [_]f32{0} ** Zone.number_of_samples,
-    frame_start: Zone.Timestamp = 0,
-    frame_idx: usize = 0,
-    self_zone: Zone = .{ .name = "Profiler", .color = defaultColor("Profiler") },
-
-    const ZoneTable = StaticHashTable([]const u8, Zone, bucket_count, bucket_entries);
-    pub const bucket_count = 32;
-    pub const bucket_entries = 5;
-    pub const max_zone_nesting = 32;
-
-    pub fn markFrame(self: *Profiler) void {
-        self.self_zone.start();
-        defer _ = self.self_zone.stop();
-
-        // don't count start up as 1st frame
-        if (self.frame_start == 0) {
-            self.frame_start = Zone.timestamp();
-            return;
-        }
-
-        var zone_iter = self.zoneIterator(true, false);
-        while (zone_iter.next()) |zone| zone.commit();
-
-        const new_frame_start = Zone.timestamp();
-        const elapsed_ns: f32 = @floatFromInt(new_frame_start - self.frame_start);
-        self.frame_start = new_frame_start;
-
-        const frame_slice_idx = (self.frame_idx % self.frame_times.len);
-        self.frame_times[frame_slice_idx] = elapsed_ns / std.time.ns_per_s;
-        self.frame_idx += 1;
-    }
-
-    fn defaultColor(name: []const u8) vec4 {
-        const hash = ZoneTable.hashFromKey(name);
-        return UI.colorFromRGB(
-            @intCast((hash >> 0) & 0xff),
-            @intCast((hash >> 8) & 0xff),
-            @intCast((hash >> 16) & 0xff),
-        );
-    }
-
-    pub fn startZoneN(self: *Profiler, comptime name: []const u8) void {
-        self.self_zone.start();
-        defer _ = self.self_zone.stop();
-
-        const hash = comptime ZoneTable.hashFromKey(name);
-        const gop = self.zone_table.getOrPutHash(hash) catch @panic("OOM");
-        const zone = gop.value;
-        if (!gop.found_existing) {
-            zone.* = .{ .name = name, .color = comptime defaultColor(name) };
-        }
-        zone.start();
-        self.zone_stack.append(zone) catch @panic("OOM");
-    }
-
-    pub fn stopZone(self: *Profiler) void {
-        self.self_zone.start();
-        defer _ = self.self_zone.stop();
-
-        const zone = self.zone_stack.pop();
-        const zone_time = zone.elapsed();
-        if (zone.stop() and self.zone_stack.len > 0) {
-            const parent = self.zone_stack.slice()[self.zone_stack.len - 1];
-            parent.acc_child_sample += zone_time;
-        }
-    }
-
-    pub const ZoneIterator = struct {
-        profiler: *Profiler,
-        include_profiler: bool,
-        only_displayed_zones: bool,
-        zone_it: ZoneTable.Iterator,
-        returned_profiler_zone: bool = false,
-
-        pub fn next(self: *ZoneIterator) ?*Zone {
-            if (self.include_profiler and !self.returned_profiler_zone) {
-                self.returned_profiler_zone = true;
-                if (!self.only_displayed_zones or self.profiler.self_zone.display)
-                    return &self.profiler.self_zone;
-            }
-            var entry = self.zone_it.next() orelse return null;
-            if (self.only_displayed_zones) {
-                while (!entry.value.display) entry = self.zone_it.next() orelse return null;
-            }
-            return entry.value;
-        }
-    };
-
-    pub fn zoneIterator(self: *Profiler, include_profiler: bool, only_displayed_zones: bool) ZoneIterator {
-        return .{
-            .profiler = self,
-            .include_profiler = include_profiler,
-            .only_displayed_zones = only_displayed_zones,
-            .zone_it = self.zone_table.iterator(),
-        };
-    }
-};
-
-pub const Zone = struct {
-    samples: [number_of_samples]f32 = [_]f32{0} ** number_of_samples,
-    sample_counter: [number_of_samples]u32 = [_]u32{0} ** number_of_samples,
-    child_samples: [number_of_samples]f32 = [_]f32{0} ** number_of_samples,
-    idx: usize = 0,
-
-    start_timestamp: ?Timestamp = null,
-    recursion_level: u8 = 0,
-    acc_sample: Timestamp = 0,
-    acc_counter: u32 = 0,
-    acc_child_sample: Timestamp = 0,
-
-    name: []const u8,
-    color: vec4,
-    display: bool = true,
-
-    pub const Timestamp = i128;
-    // in testing locally I observed that `std.time.nanoTimestamp` took
-    // around 38ns/call (20ns/call in release mode) while using `std.time.Timer`
-    // took around 71ns/call (24ns/call in release mode)
-    pub const timestamp = std.time.nanoTimestamp;
-
-    const number_of_samples = 1024;
-
-    pub fn start(self: *Zone) void {
-        // for recursing functions we ignore the nested starts/stops
-        if (self.start_timestamp) |_| {
-            self.recursion_level += 1;
-        } else {
-            self.start_timestamp = timestamp();
-        }
-    }
-
-    pub fn elapsed(self: *Zone) Timestamp {
-        return timestamp() - self.start_timestamp.?;
-    }
-
-    /// Returns `false` when we are stopping inside a recursion
-    pub fn stop(self: *Zone) bool {
-        // for recursing functions we ignore the nested starts/stops time
-        // but keep the call counter
-        self.acc_counter += 1;
-        if (self.recursion_level == 0) {
-            self.acc_sample += self.elapsed();
-            self.start_timestamp = null;
-            return true;
-        } else {
-            self.recursion_level -= 1;
-            return false;
-        }
-    }
-
-    pub fn commit(self: *Zone) void {
-        self.samples[self.idx] = @as(f32, @floatFromInt(self.acc_sample)) / std.time.ns_per_s;
-        self.sample_counter[self.idx] = self.acc_counter;
-        self.child_samples[self.idx] = @as(f32, @floatFromInt(self.acc_child_sample)) / std.time.ns_per_s;
-        self.acc_sample = 0;
-        self.acc_counter = 0;
-        self.acc_child_sample = 0;
-        self.idx += 1;
-        self.idx %= number_of_samples;
-    }
-};
-
-const ProfilerDisplay = struct {
-    mode: Mode = .sample_time,
-    max_y: f32 = target_ms_per_frame * max_y_leeway_multiplier,
-    include_children: bool = true,
-
-    pub const Mode = enum { sample_time, call_count };
-
-    pub const max_y_leeway_multiplier = 1.05;
-};
-var profiler_display = ProfilerDisplay{};
-
-fn helperShowNodeTableHist(ui: *UI) void {
-    prof.startZoneN("helperShowNodeTableHist");
-    defer prof.stopZone();
-
-    ui.pushStyle(.{ .font_size = 14 });
-    defer _ = ui.popStyle();
-    _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) }, .x);
-    defer _ = ui.popParent();
-    const max_bar_height = 100; // in px
-    var max_count: usize = 0;
-    for (ui.node_table.buckets) |bucket| {
-        max_count = @max(max_count, bucket.count());
-    }
-    for (ui.node_table.buckets, 0..) |bucket, idx| {
-        _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.children(1) }, .y);
-        defer _ = ui.popParent();
-        _ = ui.addNodeF(.{
-            .draw_text = true,
-            .draw_background = true,
-            .draw_border = true,
-            .no_id = true,
-            .disable_text_truncation = true,
-        }, "{:0>2}", .{idx}, .{
-            .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) },
-            .text_align = .center,
-        });
-        const count = bucket.count();
-        _ = ui.addNodeF(.{
-            .draw_text = true,
-            .no_id = true,
-            .disable_text_truncation = true,
-        }, "{:0>2}", .{count}, .{
-            .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) },
-            .text_align = .center,
-        });
-        const bar_size = max_bar_height * @as(f32, @floatFromInt(count)) / @as(f32, @floatFromInt(max_count));
-        _ = ui.addNode(.{
-            .draw_border = true,
-            .draw_background = true,
-            .no_id = true,
-        }, "", .{ .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.pixels(bar_size, 1) } });
-    }
-}
-const ColInfo = struct {
-    name: []const u8,
-    size: f32, // in pixels
-};
-fn showTableHeader(ui: *UI, cols: []ColInfo, sorted_col: *usize, reverse: *bool) void {
-    ui.startLine();
-    defer ui.endLine();
-    for (cols, 0..) |col, col_idx| {
-        var flags = UI.button_flags;
-        flags.draw_text = false;
-        flags.draw_background = false;
-        const btn = ui.addNodeF(flags, "###{}_header", .{col_idx}, .{
-            .size = [2]UI.Size{ UI.Size.pixels(col.size, 1), UI.Size.children(1) },
-            .cursor_type = .pointing_hand,
-            .layout_axis = .x,
-        });
-        {
-            ui.pushParent(btn);
-            ui.label(col.name);
-            ui.spacer(.x, UI.Size.percent(1, 0));
-            if (sorted_col.* == col_idx) {
-                ui.iconLabel(if (reverse.*) UI.Icons.down_open else UI.Icons.up_open);
-            }
-            _ = ui.popParent();
-        }
-        if (btn.signal.clicked) {
-            if (sorted_col.* == col_idx) reverse.* = !reverse.*;
-            sorted_col.* = col_idx;
-        }
-    }
-}
-fn startColEntry(ui: *UI, cols: []ColInfo, col_idx: *usize) void {
-    const col_entry_p = ui.addNode(.{
-        .draw_border = true,
-        .no_id = true,
-    }, "", .{
-        .size = [2]UI.Size{ UI.Size.pixels(cols[col_idx.*].size, 1), UI.Size.children(1) },
-        .layout_axis = .x,
-    });
-    ui.pushParent(col_entry_p);
-}
-fn endColEntry(ui: *UI, _: []ColInfo, col_idx: *usize) void {
-    _ = ui.popParent(); // col_entry_p
-    col_idx.* += 1;
-}
-var zone_table_cols = [_]ColInfo{
-    .{ .name = "zone", .size = 275 },
-    .{ .name = "% of frame", .size = 125 },
-    .{ .name = "ms/frame", .size = 100 },
-    .{ .name = "calls/frame", .size = 125 },
-    .{ .name = "μs/call", .size = 100 },
-};
-var zone_table_sorted_col: usize = 1;
-var zone_table_sorted_col_reverse: bool = true;
-fn helperShowZoneTable(ui: *UI, profiler: *Profiler) void {
-    prof.startZoneN("helperShowZoneTable");
-    defer prof.stopZone();
-
-    _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) }, .y);
-    defer _ = ui.popParent();
-
-    const n_samples = @min(Zone.number_of_samples, profiler.frame_idx);
-    const frame_times = profiler.frame_times[0..n_samples];
-
-    const TableEntry = struct {
-        zone: *Zone,
-        avg_pct_of_frame: f32,
-        avg_s_per_frame: f32,
-        avg_calls_per_frame: f32,
-        avg_s_per_call: f32,
-
-        pub fn fromZone(zone: *Zone, frame_samples: []const f32, used_samples: usize, include_children: bool) @This() {
-            std.debug.assert(used_samples == frame_samples.len);
-            const samples = zone.samples[0..used_samples];
-            const child_samples = zone.child_samples[0..used_samples];
-            const sample_counter = zone.sample_counter[0..used_samples];
-            const total_pct_of_frame: f32 = sum: {
-                var tmp_buf: [Zone.number_of_samples]f32 = undefined;
-                const tmp = tmp_buf[0..used_samples];
-                @memcpy(tmp, samples);
-                if (!include_children) binOpSlices(f32, .Sub, tmp, tmp, child_samples);
-                binOpSlices(f32, .Div, tmp, tmp, frame_samples);
-                break :sum reduceSlice(f32, .Add, tmp);
-            };
-            const total_time = if (include_children)
-                reduceSlice(f32, .Add, samples)
-            else
-                reduceSlice(f32, .Add, samples) - reduceSlice(f32, .Add, child_samples);
-            const total_calls: f32 = @floatFromInt(reduceSlice(u32, .Add, sample_counter));
-            const total_s_per_call = sum: {
-                var tmp_buf: [Zone.number_of_samples]f32 = undefined;
-                const tmp = tmp_buf[0..used_samples];
-                @memcpy(tmp, samples);
-                if (!include_children) binOpSlices(f32, .Sub, tmp, tmp, child_samples);
-                var tmp_counter_buf: [Zone.number_of_samples]f32 = undefined;
-                const tmp_counter = tmp_counter_buf[0..used_samples];
-                for (tmp_counter, 0..) |*v, idx| v.* = @floatFromInt(@max(sample_counter[idx], 1));
-                binOpSlices(f32, .Div, tmp, tmp, tmp_counter);
-                break :sum reduceSlice(f32, .Add, tmp);
-            };
-            const n_samples_f: f32 = @floatFromInt(used_samples);
-            return .{
-                .zone = zone,
-                .avg_pct_of_frame = total_pct_of_frame / n_samples_f,
-                .avg_s_per_frame = total_time / n_samples_f,
-                .avg_calls_per_frame = total_calls / n_samples_f,
-                .avg_s_per_call = total_s_per_call / n_samples_f,
-            };
-        }
-    };
-    const table_lines = blk: {
-        const line_count = (Profiler.bucket_count * Profiler.bucket_entries) + 1;
-        var array = std.BoundedArray(TableEntry, line_count){};
-
-        var zone_it = profiler.zoneIterator(true, false);
-        while (zone_it.next()) |zone| {
-            array.append(TableEntry.fromZone(zone, frame_times, n_samples, profiler_display.include_children)) catch unreachable;
-        }
-
-        prof.startZoneN("sort table entries");
-        const SortCtx = struct { sort_col_idx: usize, reverse: bool };
-        std.sort.insertion(TableEntry, array.slice(), SortCtx{
-            .sort_col_idx = zone_table_sorted_col,
-            .reverse = zone_table_sorted_col_reverse,
-        }, (struct {
-            pub fn func(ctx: SortCtx, lhs: TableEntry, rhs: TableEntry) bool {
-                const less_than = switch (ctx.sort_col_idx) {
-                    0 => blk: {
-                        var idx: usize = 0;
-                        while (idx < @min(lhs.zone.name.len, rhs.zone.name.len)) : (idx += 1) {
-                            if (lhs.zone.name[idx] != rhs.zone.name[idx])
-                                break :blk lhs.zone.name[idx] < rhs.zone.name[idx];
-                        }
-                        break :blk false;
-                    },
-                    1 => lhs.avg_pct_of_frame < rhs.avg_pct_of_frame,
-                    2 => lhs.avg_s_per_frame < rhs.avg_s_per_frame,
-                    3 => lhs.avg_calls_per_frame < rhs.avg_calls_per_frame,
-                    4 => lhs.avg_s_per_call < rhs.avg_s_per_call,
-                    else => unreachable,
-                };
-                return if (ctx.reverse) !less_than else less_than;
-            }
-        }).func);
-        prof.stopZone();
-
-        break :blk array;
-    };
-
-    showTableHeader(ui, &zone_table_cols, &zone_table_sorted_col, &zone_table_sorted_col_reverse);
-
-    const table_lines_p = ui.pushLayoutParent(.{
-        .clip_children = true,
-        .scroll_children_y = true,
-    }, "table_lines_p", [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) }, .y);
-    defer ui.popParentAssert(table_lines_p);
-
-    for (table_lines.slice(), 0..) |entry, zone_idx| {
-        const zone = entry.zone;
-
-        ui.startLine();
-        defer ui.endLine();
-        var col_idx: usize = 0;
-        { // 'zone' column
-            startColEntry(ui, &zone_table_cols, &col_idx);
-            defer endColEntry(ui, &zone_table_cols, &col_idx);
-
-            ui.spacer(.x, UI.Size.em(0.2, 1));
-            // TODO: turn this into a button that opens a color picker
-            _ = ui.addNode(.{
-                .draw_background = true,
-                .no_id = true,
-                .floating_y = true,
-            }, "", .{
-                .size = UI.Size.exact(.em, 1, 1),
-                .bg_color = zone.color,
-                .rel_pos = UI.RelativePlacement.match(.center),
-            });
-            ui.spacer(.x, UI.Size.em(0.1, 1));
-            const checkmark = ui.addNodeF(.{
-                .clickable = true,
-                .draw_text = true,
-                .draw_border = true,
-                .draw_background = zone.display,
-                .draw_hot_effects = true,
-                .floating_y = true,
-            }, "{s}###{}_zone_toggle", .{ UI.Icons.ok, zone_idx }, .{
-                .cursor_type = .pointing_hand,
-                .font_type = .icon,
-                .font_size = ui.topStyle().font_size * 0.75,
-                .rel_pos = UI.RelativePlacement.match(.center),
-            });
-            if (!zone.display) checkmark.flags.draw_text = false; // TODO: shouldn't have to do it like this (this is because we check 'flags.draw_text' inside addNode to call 'calcTextRect'
-            if (checkmark.signal.clicked) zone.display = !zone.display;
-            ui.spacer(.x, UI.Size.em(0.1, 1));
-            const name_node = ui.addNodeF(.{
-                .draw_text = true,
-            }, "{s}###{}_name", .{ zone.name, zone_idx }, .{
-                .size = [2]UI.Size{ UI.Size.percent(1, 0), UI.Size.text(1) },
-            });
-            if (name_node.text_truncated and name_node.signal.hovering) {
-                ui.startTooltip(null);
-                ui.label(zone.name);
-                ui.endTooltip();
-            }
-        }
-        { // '% of frame' column
-            startColEntry(ui, &zone_table_cols, &col_idx);
-            defer endColEntry(ui, &zone_table_cols, &col_idx);
-            ui.labelF("{d:2.1}", .{100 * entry.avg_pct_of_frame});
-        }
-        { // 'ms/frame' column
-            startColEntry(ui, &zone_table_cols, &col_idx);
-            defer endColEntry(ui, &zone_table_cols, &col_idx);
-            ui.labelF("{d:3.2}", .{entry.avg_s_per_frame * std.time.ms_per_s});
-        }
-        { // 'calls/frame' column
-            startColEntry(ui, &zone_table_cols, &col_idx);
-            defer endColEntry(ui, &zone_table_cols, &col_idx);
-            ui.labelF("{d:2.1}", .{entry.avg_calls_per_frame});
-        }
-        { // 'μs/call' column
-            startColEntry(ui, &zone_table_cols, &col_idx);
-            defer endColEntry(ui, &zone_table_cols, &col_idx);
-            ui.labelF("{d:.1}", .{entry.avg_s_per_call * std.time.us_per_s});
-        }
-    }
-}
-fn showProfilerInfo(ui: *UI, profiler: *Profiler) UI.Rect {
-    const w = ui.startWindow("profiler_window", UI.Size.exact(.percent, 1, 1), UI.RelativePlacement.simple(vec2{ 0, 0 }));
-    defer ui.endWindow(w);
-    helperShowNodeTableHist(ui);
-    {
-        ui.startLine();
-        defer ui.endLine();
-        _ = ui.checkBox("Include children in zone time", &profiler_display.include_children);
-        if (ui.button("Enable all zones").clicked) {
-            var zone_it = profiler.zoneIterator(true, false);
-            while (zone_it.next()) |zone| zone.display = true;
-        }
-        if (ui.button("Disable all zones").clicked) {
-            var zone_it = profiler.zoneIterator(true, false);
-            while (zone_it.next()) |zone| zone.display = false;
-        }
-        {
-            const other_mode: ProfilerDisplay.Mode = switch (profiler_display.mode) {
-                .sample_time => .call_count,
-                .call_count => .sample_time,
-            };
-            if (ui.buttonF("Switch graph to {s}", .{switch (other_mode) {
-                .sample_time => "sample time",
-                .call_count => "call counter",
-            }}).clicked)
-                profiler_display.mode = other_mode;
-        }
-    }
-    {
-        _ = ui.pushLayoutParent(.{ .no_id = true }, "", UI.Size.flexible(.percent, 1, 1), .x);
-        defer _ = ui.popParent();
-
-        helperShowZoneTable(ui, profiler);
-
-        const profiler_graph_node = ui.addNode(.{
-            .draw_border = true,
-        }, "profiler_graph_node", .{
-            .size = UI.Size.flexible(.percent, 1, 1),
-        });
-
-        { // graph y-axis scale
-            _ = ui.pushLayoutParent(.{ .no_id = true }, "", [2]UI.Size{ UI.Size.children(1), UI.Size.percent(1, 0) }, .y);
-            defer _ = ui.popParent();
-
-            const order_of_mag = std.math.pow(f32, 10, @ceil(std.math.log10(@abs(profiler_display.max_y))));
-            const min_divisions = 5;
-            const max_divisions = 10;
-            var step = (order_of_mag / 10);
-            while (profiler_display.max_y / step < min_divisions + 2) step /= 2;
-            while (profiler_display.max_y / step > max_divisions - 2) step *= 2;
-            const graph_px_height = profiler_graph_node.rect.size()[1];
-            var value: f32 = step;
-            while (value < profiler_display.max_y) : (value += step) {
-                const pct = value / profiler_display.max_y;
-                const px_pos = pct * graph_px_height;
-                const str = switch (profiler_display.mode) {
-                    .sample_time => ui.fmtTmpString("{d:.0}ms", .{value * std.time.ms_per_s}),
-                    .call_count => ui.fmtTmpString("{d}", .{value}),
-                };
-                _ = ui.addNode(.{
-                    .draw_text = true,
-                    .floating_y = true,
-                    .no_id = true,
-                }, str, .{
-                    .rel_pos = UI.RelativePlacement.absolute(.{ .center = vec2{ 0, px_pos } }),
-                });
-            }
-        }
-
-        return profiler_graph_node.rect;
-    }
-}
-
-fn renderProfilerGraph(allocator: Allocator, profiler: *Profiler, rect: UI.Rect, fbsize: uvec2) !void {
-    prof.startZoneN("renderProfilerGraph");
-    defer prof.stopZone();
-    // TODO: change UI render backend to operate on primitives (lines, dots, triangles, rects)
-    // instead of only supporting our special rects
-
-    // TODO: don't recreate this every time, save it as part of profiler maybe?
-    const shader = try gfx.Shader.from_srcs(allocator, "profiler_graph", .{
-        .vertex =
-        \\#version 330 core
-        \\in float sample;
-        \\uniform bool sample_is_uint;
-        \\uniform uint sample_count;
-        \\uniform float max_y;
-        \\uniform vec2 btmleft;
-        \\uniform vec2 size;
-        \\uniform vec2 screen_size;
-        \\out float pass_value;
-        \\void main() {
-        \\    float value = sample_is_uint ? float(floatBitsToInt(sample)) : sample;
-        \\    vec2 pos_graph = vec2(gl_VertexID / float(max(1, sample_count) - 1), value / max_y);
-        \\    vec2 pos_px = (pos_graph * size) + btmleft;
-        \\    vec2 pos = (pos_px / screen_size) * 2 - vec2(1);
-        \\    gl_Position = vec4(pos, 0, 1);
-        \\    pass_value = value;
-        \\}
-        ,
-        .fragment =
-        \\#version 330 core
-        \\in float pass_value;
-        \\uniform float max_y;
-        \\uniform vec4 color;
-        \\out vec4 FragColor;
-        \\void main() {
-        \\    if (pass_value > max_y) discard;
-        \\    FragColor = color;
-        \\}
-        ,
-    });
-    defer shader.deinit();
-
-    // auto-size graph
-    {
-        profiler_display.max_y = 0;
-        var zone_it = profiler.zoneIterator(true, true);
-        while (zone_it.next()) |zone| {
-            const max_sample = switch (profiler_display.mode) {
-                .sample_time => blk: {
-                    if (profiler_display.include_children) {
-                        break :blk reduceSlice(f32, .Max, &zone.samples);
-                    } else {
-                        var tmp: [Zone.number_of_samples]f32 = undefined;
-                        binOpSlices(f32, .Sub, &tmp, &zone.samples, &zone.child_samples);
-                        break :blk reduceSlice(f32, .Max, &tmp);
-                    }
-                },
-                .call_count => blk: {
-                    const max_sample = reduceSlice(u32, .Max, &zone.sample_counter);
-                    break :blk @as(f32, @floatFromInt(max_sample));
-                },
-            };
-            profiler_display.max_y = @max(profiler_display.max_y, max_sample * 1.05);
-        }
-    }
-
-    shader.bind();
-    shader.set("btmleft", rect.min);
-    shader.set("size", rect.size());
-    shader.set("screen_size", @as(vec2, @floatFromInt(fbsize)));
-    shader.set("max_y", profiler_display.max_y);
-    var zone_it = profiler.zoneIterator(true, true);
-    while (zone_it.next()) |zone| {
-        const n_samples = Zone.number_of_samples;
-        // TODO: don't create these buffers every time. create/alloc once then just update data
-        const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, n_samples);
-        defer vert_buf.deinit();
-        switch (profiler_display.mode) {
-            .sample_time => {
-                if (profiler_display.include_children) {
-                    vert_buf.update(sliceAsBytes(f32, &zone.samples));
-                } else {
-                    var tmp: [Zone.number_of_samples]f32 = undefined;
-                    binOpSlices(f32, .Sub, &tmp, &zone.samples, &zone.child_samples);
-                    vert_buf.update(sliceAsBytes(f32, &tmp));
-                }
-            },
-            .call_count => {
-                vert_buf.update(sliceAsBytes(u32, &zone.sample_counter));
-            },
-        }
-        shader.set("sample_is_uint", profiler_display.mode == .call_count);
-        shader.set("sample_count", @as(u32, @intCast(n_samples)));
-        shader.set("color", zone.color);
-        vert_buf.draw(gl.LINE_STRIP);
-    }
-    // draw 60fps line
-    if (profiler_display.mode == .sample_time) {
-        const samples = &[_]f32{ target_ms_per_frame, target_ms_per_frame };
-
-        const vert_buf = VertexBuffer.init(&.{.{ .type = gl.FLOAT, .len = 1 }}, samples.len);
-        defer vert_buf.deinit();
-        vert_buf.update(sliceAsBytes(f32, samples));
-        shader.set("sample_is_uint", false);
-        shader.set("sample_count", @as(u32, @intCast(samples.len)));
-        shader.set("color", vec4{ 0, 0.9, 0, 1 });
-        vert_buf.draw(gl.LINE_STRIP);
-    }
-}
-
-fn sliceAsBytes(comptime T: type, slice: []const T) []const u8 {
-    var bytes: []const u8 = undefined;
-    bytes.ptr = @ptrCast(slice.ptr);
-    bytes.len = slice.len * @sizeOf(T);
-    return bytes;
-}
-
-/// Generic GPU geometry buffer.
-pub const VertexBuffer = struct {
-    vao: u32,
-    vbo: u32,
-    // TODO: support index/element buffer
-    elem_size: usize,
-    n_elems: usize,
-    // TODO: support keeping around a copy of the GPU data inside this data structure
-    // instead of outside of it; may be helpfull in some cases.
-
-    pub const Attrib = struct {
-        /// gl.FLOAT, etc.
-        type: gl.GLenum,
-        /// e.g. len=2 for vec2
-        len: usize,
-
-        pub fn size(self: Attrib) usize {
-            return sizeOfGLType(self.type) * self.len;
-        }
-    };
-
-    /// Initialize and allocate GPU side buffer
-    pub fn init(
-        attribs: []const Attrib,
-        n_elems: usize,
-        // TODO: support multiple vbos?
-    ) VertexBuffer {
-        const elem_size = blk: {
-            var sum: usize = 0;
-            // TODO: don't assume element attribs are tighly packed?
-            for (attribs) |attrib| sum += attrib.size();
-            break :blk sum;
-        };
-
-        var vao: u32 = 0;
-        gl.genVertexArrays(1, &vao);
-        gl.bindVertexArray(vao);
-
-        var vbo: u32 = 0;
-        gl.genBuffers(1, &vbo);
-        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-        var offset: usize = 0;
-        for (attribs, 0..) |attrib, i| {
-            const index: u32 = @intCast(i);
-            const attrib_offset: ?*const anyopaque = if (offset == 0) null else @ptrFromInt(offset);
-            // TODO: don't assume elements are tighly packed?
-            gl.vertexAttribPointer(index, @intCast(attrib.len), attrib.type, gl.FALSE, @intCast(elem_size), attrib_offset);
-            gl.enableVertexAttribArray(index);
-            // TODO: don't assume element attribs are tighly packed?
-            offset += attrib.size();
-        }
-        // TODO: support gl.STATIC_DRAW as well
-        gl.bufferData(gl.ARRAY_BUFFER, @intCast(n_elems * elem_size), null, gl.DYNAMIC_DRAW);
-
-        return .{
-            .vao = vao,
-            .vbo = vbo,
-            .elem_size = elem_size,
-            .n_elems = n_elems,
-        };
-    }
-
-    pub fn deinit(self: VertexBuffer) void {
-        gl.deleteBuffers(1, &self.vbo);
-        gl.deleteVertexArrays(1, &self.vao);
-    }
-
-    /// Update buffer data, sync with GPU
-    pub fn update(self: VertexBuffer, data: []const u8) void {
-        std.debug.assert(data.len == self.elem_size * self.n_elems);
-        // TODO: support gl.STATIC_DRAW as well
-        gl.bufferData(gl.ARRAY_BUFFER, @intCast(data.len), @ptrCast(data.ptr), gl.DYNAMIC_DRAW);
-    }
-
-    pub fn draw(
-        self: VertexBuffer,
-        /// gl.LINE_STRIP, gl.TRIANGLES, etc.
-        mode: gl.GLenum,
-    ) void {
-        gl.bindVertexArray(self.vao);
-        gl.drawArrays(mode, 0, @intCast(self.n_elems));
-    }
-
-    fn sizeOfGLType(gl_type: gl.GLenum) usize {
-        return switch (gl_type) {
-            gl.UNSIGNED_BYTE => @sizeOf(u8),
-            gl.UNSIGNED_SHORT => @sizeOf(u16),
-            gl.UNSIGNED_INT => @sizeOf(u32),
-            gl.FLOAT => @sizeOf(f32),
-            gl.DOUBLE => @sizeOf(f64),
-            else => |todo| std.debug.panic("'type: gl.GLenum = {}' not suppported", .{todo}),
-        };
-    }
-};

@@ -20,6 +20,7 @@ const RelativePlacement = UI.RelativePlacement;
 const Icons = UI.Icons;
 const text_ops = @import("text_ops.zig");
 const TextAction = text_ops.TextAction;
+const utils = @import("utils.zig");
 
 pub fn spacer(ui: *UI, axis: Axis, size: Size) void {
     const sizes = switch (axis) {
@@ -71,21 +72,6 @@ pub fn labelBox(ui: *UI, str: []const u8) void {
         .draw_background = true,
         .draw_border = true,
     }, str, .{});
-}
-
-pub fn scrollableLabel(
-    ui: *UI,
-    hash: []const u8,
-    size: [2]Size,
-    str: []const u8,
-) void {
-    const p = ui.pushLayoutParent(.{
-        .clip_children = true,
-        .scroll_children_x = true,
-        .scroll_children_y = true,
-    }, hash, size, .y);
-    defer ui.popParentAssert(p);
-    ui.label(str);
 }
 
 pub fn text(ui: *UI, str: []const u8) Signal {
@@ -171,25 +157,22 @@ pub fn subtleIconButton(ui: *UI, str: []const u8) Signal {
 pub fn slider(
     ui: *UI,
     comptime T: type,
-    name: []const u8,
+    hash: []const u8,
     size: [2]Size,
     value_ptr: *T,
     min: T,
     max: T,
 ) void {
-    // TODO: also allow integer types for values
-    // if (T != f32 and T != f64) @panic("TODO: add support for non-float types for `slider`");
     // TODO: generalizing this to y-axis slider so it can be used for scroll bars and stuff like volume sliders
     // TODO: maybe add a more generic slider functions like `sliderOptions` or `sliderExtra` or `sliderOpts` or `sliderEx`
-    //       or just add an `options: SliderOptions` argument, following the convention of zig stdlib
-
+    // or just add an `options: SliderOptions` argument, following the convention of zig stdlib
     value_ptr.* = clamp(value_ptr.*, min, max);
 
     const style = ui.topStyle();
 
     const scroll_zone = ui.pushLayoutParentF(.{
         .clickable = true,
-    }, "{s}_slider", .{name}, size, .x);
+    }, "{s}_slider", .{hash}, size, .x);
     defer ui.popParentAssert(scroll_zone);
 
     const scroll_size = scroll_zone.rect.size();
@@ -250,7 +233,33 @@ pub fn slider(
     value_ptr.* = clamp(value_ptr.*, min, max);
 }
 
-pub fn checkBox(ui: *UI, str: []const u8, value: *bool) Signal {
+pub fn namedSlider(
+    ui: *UI,
+    comptime T: type,
+    str: []const u8,
+    size: [2]Size,
+    value_ptr: *T,
+    min: T,
+    max: T,
+) void {
+    _ = ui;
+    _ = str;
+    _ = size;
+    _ = value_ptr;
+    _ = min;
+    _ = max;
+    @compileError("TODO");
+}
+
+pub fn checkBox(ui: *UI, hash: []const u8, value: *bool) Signal {
+    const sig = ui.iconButtonF("{s}###{s}", .{ Icons.ok, hash });
+    const node = sig.node.?;
+    if (!value.*) node.flags.draw_text = false;
+    if (sig.clicked) value.* = !value.*;
+    return sig;
+}
+
+pub fn namedCheckBox(ui: *UI, str: []const u8, value: *bool) Signal {
     const hash_str = UI.hashPartOfString(str);
     const disp_str = UI.displayPartOfString(str);
 
@@ -258,18 +267,14 @@ pub fn checkBox(ui: *UI, str: []const u8, value: *bool) Signal {
     defer _ = ui.popParent();
 
     ui.pushTmpStyle(.{
-        .font_size = 0.75 * ui.topStyle().font_size,
+        .font_size = 0.7 * ui.topStyle().font_size,
         .alignment = .center,
     });
-    const tick_box = ui.iconButton(Icons.ok).node.?;
-    if (!value.*) {
-        tick_box.flags.draw_text = false;
-    }
-    if (tick_box.signal.clicked) value.* = !value.*;
+    const sig = ui.checkBox(hash_str, value);
 
     ui.label(disp_str);
 
-    return tick_box.signal;
+    return sig;
 }
 
 pub fn toggleButton(ui: *UI, str: []const u8, start_open: bool) Signal {
@@ -370,9 +375,7 @@ pub const TabOptions = struct {
     tabbed_content_border: vec4 = UI.colorFromRGB(0xc1, 0x80, 0x0b),
     close_btn: bool = false,
 };
-pub fn startTabList(
-    ui: *UI,
-) void {
+pub fn startTabList(ui: *UI) void {
     // TODO: this `tab_list_p` could be a 'named {start,end}Line' maybe?
     const tab_list_p = ui.addNode(.{
         .scroll_children_x = true,
@@ -448,6 +451,7 @@ pub fn enumTabList(ui: *UI, comptime T: type, selected_tab: *T) struct {
 }
 
 /// pushes a new node as parent that is meant only for layout purposes
+// TODO: delete this, use `addParent` instead
 pub fn pushLayoutParent(
     ui: *UI,
     flags: Flags,
@@ -967,7 +971,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     const square_size = Size.exact(.pixels, square_px_size, square_px_size);
     const hue_bar_size = Size.exact(.pixels, square_px_size / 10, square_px_size);
 
-    var hsv = RGBtoHSV(color.*);
+    var hsv = utils.RGBtoHSV(color.*);
 
     const background_node = ui.addNodeStrings(.{
         .draw_border = true,
@@ -986,7 +990,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
         .custom_draw_fn = (struct {
             pub fn draw(_: *UI, shader_inputs: *std.ArrayList(UI.ShaderInput), node: *UI.Node) error{OutOfMemory}!void {
                 const hue = @as(*align(1) const vec4, @ptrCast(node.custom_draw_ctx_as_bytes.?.ptr)).*;
-                const hue_color = HSVtoRGB(vec4{ hue[0], 1, 1, 1 });
+                const hue_color = utils.HSVtoRGB(vec4{ hue[0], 1, 1, 1 });
                 var rect = UI.ShaderInput.fromNode(node);
                 rect.edge_softness = 0;
                 rect.border_thickness = vec4{ -1, -1, -1, -1 };
@@ -1086,7 +1090,7 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
 
     ui.spacer(.x, Size.pixels(3, 1));
 
-    color.* = HSVtoRGB(hsv);
+    color.* = utils.HSVtoRGB(hsv);
 
     // TODO: allow switching between representations for the sliders (RGBA, HSVA, OKLAB)
 
@@ -1105,55 +1109,6 @@ pub fn colorPicker(ui: *UI, hash: []const u8, color: *vec4) void {
     }
 }
 
-fn RGBtoHSV(rgba: vec4) vec4 {
-    const r = rgba[0];
-    const g = rgba[1];
-    const b = rgba[2];
-    const x_max = @max(r, g, b);
-    const x_min = @min(r, g, b);
-    const V = x_max;
-    const C = x_max - x_min;
-    const H = if (C == 0)
-        0
-    else if (V == r)
-        60 * @mod((g - b) / C, 6)
-    else if (V == g)
-        60 * (((b - r) / C) + 2)
-    else if (V == b)
-        60 * (((r - g) / C) + 4)
-    else
-        unreachable;
-    const S_V = if (V == 0) 0 else C / V;
-
-    return vec4{
-        H / 360,
-        S_V,
-        V,
-        rgba[3],
-    };
-}
-
-fn HSVtoRGB(hsva: vec4) vec4 {
-    const h = (hsva[0] * 360) / 60;
-    const C = hsva[2] * hsva[1];
-    const X = C * (1 - @abs(@mod(h, 2) - 1));
-    const rgb_l = switch (@as(u32, @intFromFloat(@floor(h)))) {
-        0 => vec3{ C, X, 0 },
-        1 => vec3{ X, C, 0 },
-        2 => vec3{ 0, C, X },
-        3 => vec3{ 0, X, C },
-        4 => vec3{ X, 0, C },
-        else => vec3{ C, 0, X },
-    };
-    const m = hsva[2] - C;
-    return vec4{
-        rgb_l[0] + m,
-        rgb_l[1] + m,
-        rgb_l[2] + m,
-        hsva[3],
-    };
-}
-
 pub fn labelF(ui: *UI, comptime fmt: []const u8, args: anytype) void {
     const str = ui.fmtTmpString(fmt, args);
     ui.label(str);
@@ -1162,11 +1117,6 @@ pub fn labelF(ui: *UI, comptime fmt: []const u8, args: anytype) void {
 pub fn labelBoxF(ui: *UI, comptime fmt: []const u8, args: anytype) void {
     const str = ui.fmtTmpString(fmt, args);
     ui.labelBox(str);
-}
-
-pub fn scrollableLabelF(ui: *UI, hash: []const u8, size: [2]Size, comptime fmt: []const u8, args: anytype) void {
-    const str = ui.fmtTmpString(fmt, args);
-    ui.scrollableLabel(hash, size, str);
 }
 
 pub fn textF(ui: *UI, comptime fmt: []const u8, args: anytype) Signal {
@@ -1204,9 +1154,24 @@ pub fn subtleIconButtonF(ui: *UI, comptime fmt: []const u8, args: anytype) Signa
     return ui.subtleIconButton(str);
 }
 
+pub fn sliderF(ui: *UI, comptime T: type, comptime fmt: []const u8, args: anytype, size: [2]Size, value_ptr: *T, min: T, max: T) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.slider(T, str, size, value_ptr, min, max);
+}
+
+pub fn namedSliderF(ui: *UI, comptime T: type, comptime fmt: []const u8, args: anytype, size: [2]Size, value_ptr: *T, min: T, max: T) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.namedSlider(T, str, size, value_ptr, min, max);
+}
+
 pub fn checkBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, value: *bool) Signal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.checkBox(str, value);
+}
+
+pub fn namedCheckBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, value: *bool) Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.namedCheckBox(str, value);
 }
 
 pub fn toggleButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, start_open: bool) Signal {
@@ -1219,9 +1184,54 @@ pub fn startListBoxButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, lay
     return ui.startListBoxButton(str, layout_axis);
 }
 
+pub fn startListBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, size: [2]Size) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.startListBoxButton(str, size);
+}
+
+pub fn stringsListBoxF(ui: *UI, comptime fmt: []const u8, args: anytype, size: [2]Size, choices: []const []const u8, chosen_idx: *usize) Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return stringsListBox(str, size, choices, chosen_idx);
+}
+
+pub fn dropDownListF(ui: *UI, comptime fmt: []const u8, args: anytype, size: [2]Size, choices: []const []const u8, chosen_idx: *usize) Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.dropDownList(str, size, choices, chosen_idx);
+}
+
 pub fn tabButtonF(ui: *UI, comptime fmt: []const u8, args: anytype, selected: bool, opts: TabOptions) TabSignal {
     const str = ui.fmtTmpString(fmt, args);
     return ui.tabButton(str, selected, opts);
+}
+
+pub fn startWindowF(ui: *UI, comptime fmt: []const u8, args: anytype, size: [2]Size, pos: RelativePlacement) *Node {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.startWindow(str, size, pos);
+}
+
+pub fn startScrollViewF(ui: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, init_args: anytype) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.startScrollView(flags, str, init_args);
+}
+
+pub fn scrollbarF(ui: *UI, comptime fmt: []const u8, args: anytype, axis: Axis, content_size: f32, scroll_view_parent: *Node, opts: ScrollbarOptions) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.scrollbar(str, axis, content_size, scroll_view_parent, opts);
+}
+
+pub fn lineInputF(ui: *UI, comptime fmt: []const u8, args: anytype, input: *TextInput, opts: LineInputOptions) Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.lineInput(str, input, opts);
+}
+
+pub fn textInputRawF(ui: *UI, comptime fmt: []const u8, args: anytype, input: *TextInput, opts: TextInputOptions) !Signal {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.textInputRaw(str, input, opts);
+}
+
+pub fn colorPickerF(ui: *UI, comptime fmt: []const u8, args: anytype, color: *vec4) void {
+    const str = ui.fmtTmpString(fmt, args);
+    return ui.colorPicker(str, color);
 }
 
 pub fn pushLayoutParentF(ui: *UI, flags: Flags, comptime fmt: []const u8, args: anytype, size: [2]Size, layout_axis: Axis) *Node {
@@ -1229,5 +1239,27 @@ pub fn pushLayoutParentF(ui: *UI, flags: Flags, comptime fmt: []const u8, args: 
     return ui.pushLayoutParent(flags, str, size, layout_axis);
 }
 
-// TODO: do a comptime check here that all public functions in this file that
-// take a `[]const u8` parameter have the corresponding format version of the function
+// make sure we don't forget to write the format string version of all the
+// functions that have a '[]const u8' string parameter
+comptime {
+    const decls = @typeInfo(@This()).Struct.decls;
+    for (decls) |decl| {
+        const Decl = @TypeOf(@field(@This(), decl.name));
+        if (@typeInfo(Decl) != .Fn) continue;
+        if (decl.name[decl.name.len - 1] == 'F') continue;
+        const str_param_idx: usize = idx: {
+            for (@typeInfo(Decl).Fn.params, 0..) |param, p_idx| {
+                if (param.type == []const u8) break :idx p_idx;
+            }
+            continue;
+        };
+
+        const fmt_fn_name = decl.name ++ "F";
+        if (!@hasDecl(@This(), fmt_fn_name)) {
+            @compileError("Missing format version of '" ++ decl.name ++ "'");
+        }
+        const fmt_params = @typeInfo(@TypeOf(@field(@This(), fmt_fn_name))).Fn.params;
+        std.debug.assert(fmt_params[str_param_idx].type == []const u8);
+        std.debug.assert(fmt_params[str_param_idx + 1].type == null);
+    }
+}

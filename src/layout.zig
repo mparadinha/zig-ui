@@ -7,10 +7,10 @@ const UI = @import("UI.zig");
 const Node = UI.Node;
 const Axis = UI.Axis;
 
-const prof = &@import("root").prof;
+const prof = if (@import("profiler.zig").root_has_prof) &@import("root").prof else &@import("profiler.zig").dummy;
 
 pub fn layoutTree(self: *UI, root: *Node) void {
-    prof.startZoneN("UI.layoutTree");
+    prof.startZoneN("UI." ++ @src().fn_name);
     defer prof.stopZone();
     solveIndependentSizes(self, root);
     solveDownwardDependent(self, root);
@@ -20,30 +20,40 @@ pub fn layoutTree(self: *UI, root: *Node) void {
 }
 
 fn solveIndependentSizes(self: *UI, node: *Node) void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
     const work_fn = solveIndependentSizesWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveDownwardDependent(self: *UI, node: *Node) void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
     const work_fn = solveDownwardDependentWorkFn;
     layoutRecurseHelperPost(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPost(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveUpwardDependent(self: *UI, node: *Node) void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
     const work_fn = solveUpwardDependentWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveViolations(self: *UI, node: *Node) void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
     const work_fn = solveViolationsWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });
 }
 
 fn solveFinalPos(self: *UI, node: *Node) void {
+    prof.startZoneN("UI." ++ @src().fn_name);
+    defer prof.stopZone();
     const work_fn = solveFinalPosWorkFn;
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .x });
     layoutRecurseHelperPre(work_fn, .{ .self = self, .node = node, .axis = .y });

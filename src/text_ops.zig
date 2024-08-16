@@ -1,6 +1,8 @@
 const std = @import("std");
 const zig_ui = @import("../zig_ui.zig");
 const glfw = zig_ui.glfw;
+const castWrappedAdd = zig_ui.utils.castWrappedAdd;
+const castAndSub = zig_ui.utils.castAndSub;
 
 pub const TextAction = struct {
     flags: struct {
@@ -151,7 +153,7 @@ pub fn textOpFromAction(action: TextAction, cursor: usize, mark: usize, unicode_
         if (action.delta == 1 and cursor < buf.len) {
             byte_delta = try std.unicode.utf8ByteSequenceLength(buf[cursor]);
         } else if (action.delta == -1 and cursor > 0) {
-            const utf8_viewer = Utf8Viewer.init(buf[0..cursor]);
+            const utf8_viewer = Utf8View.init(buf[0..cursor]);
             const char_size = utf8_viewer.lastCharByteSize();
             byte_delta = -@as(isize, @intCast(char_size));
         }
@@ -189,7 +191,7 @@ pub fn textOpFromAction(action: TextAction, cursor: usize, mark: usize, unicode_
         const diff = castAndSub(isize, text_op.replace_str.len, range_len);
         text_op.byte_cursor = castWrappedAdd(text_op.byte_cursor, diff);
     }
-    if (!action.flags.keep_mark) text_op.byte_mark = text_op.byte_cursor;
+    if (!action.flags.keep_mark or action.flags.delete) text_op.byte_mark = text_op.byte_cursor;
 
     return text_op;
 }
@@ -274,25 +276,16 @@ pub fn replaceRange(buffer: []u8, buf_len: *usize, range: struct { start: usize,
     for (new, 0..) |byte, i| buffer[range.start + i] = byte;
 }
 
-fn castWrappedAdd(src: usize, diff: isize) usize {
-    const new_src = @as(isize, @intCast(src)) + diff;
-    return @intCast(@max(0, new_src));
-}
-
-fn castAndSub(comptime T: type, a: anytype, b: anytype) T {
-    return @as(T, @intCast(a)) - @as(T, @intCast(b));
-}
-
-const Utf8Viewer = struct {
+const Utf8View = struct {
     bytes: []const u8,
 
-    pub fn init(bytes: []const u8) Utf8Viewer {
+    pub fn init(bytes: []const u8) Utf8View {
         std.debug.assert(std.unicode.utf8ValidateSlice(bytes));
         return .{ .bytes = bytes };
     }
 
     /// number of bytes occupied by the last character
-    pub fn lastCharByteSize(self: Utf8Viewer) u3 {
+    pub fn lastCharByteSize(self: Utf8View) u3 {
         const len = self.bytes.len;
         var size = @min(4, len);
         while (size > 0) : (size -= 1) {
@@ -306,7 +299,7 @@ const Utf8Viewer = struct {
     }
 
     /// number of bytes occupied by character at a character index
-    pub fn byteSizeAt(self: Utf8Viewer, pos: usize) usize {
+    pub fn byteSizeAt(self: Utf8View, pos: usize) usize {
         var idx: usize = 0;
         var utf8_iter = std.unicode.Utf8View.initUnchecked(self.bytes).iterator();
         while (utf8_iter.nextCodepointSlice()) |codepoint_slice| : (idx += 1) {
@@ -315,7 +308,7 @@ const Utf8Viewer = struct {
         unreachable;
     }
 
-    pub fn charPosIntoBytes(self: Utf8Viewer, pos: usize) usize {
+    pub fn charPosIntoBytes(self: Utf8View, pos: usize) usize {
         var idx: usize = 0;
         var bytes: usize = 0;
         var utf8_iter = std.unicode.Utf8View.initUnchecked(self.bytes).iterator();
@@ -327,7 +320,7 @@ const Utf8Viewer = struct {
     }
 
     /// return the index of the match in codepoints, *not* bytes
-    pub fn findLast(self: Utf8Viewer, to_match: u21) ?usize {
+    pub fn findLast(self: Utf8View, to_match: u21) ?usize {
         var idx: usize = 0;
         var match_idx: ?usize = null;
         var utf8_iter = std.unicode.Utf8View.initUnchecked(self.bytes).iterator();
@@ -338,7 +331,7 @@ const Utf8Viewer = struct {
     }
 
     /// convert a character index based range into the bytes range
-    pub fn bytesRange(self: Utf8Viewer, start: usize, end: usize) []const u8 {
+    pub fn bytesRange(self: Utf8View, start: usize, end: usize) []const u8 {
         var start_byte_idx: usize = 0;
 
         var idx: usize = 0;
