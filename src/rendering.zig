@@ -169,6 +169,9 @@ pub fn render(self: *UI) !void {
     }
     vertex_data.draw(gl.POINTS);
     prof.stopZone();
+
+    // @WIP
+    try wip_testing_draw_triangle_primitive(self);
 }
 
 fn setupTreeForRender(self: *UI, shader_inputs: *std.ArrayList(ShaderInput), root: *Node) !void {
@@ -404,4 +407,64 @@ fn largeInputOptimizationVisiblePartOfText(self: *UI, node: *Node) struct {
         .string = rest_of_string[0..end_idx],
         .offset = top_extra,
     };
+}
+
+// TODO: these will be the user facing structs
+// TODO: add suport for rotated primitives?
+const DrawRect = struct { // default used for nodes
+
+};
+// TODO: optimize this struct layout later if needed
+const DrawTriangle = struct {
+    verts: [3]struct { pos: vec2, color: vec4 },
+    // TODO: add support for rounded corners in triangles (borders as well?)
+};
+const DrawLine = struct {};
+// TODO: custom draw fn that gets called in the middle of rendering
+// so users can use fully custom data/shaders/whatever
+fn wip_testing_draw_triangle_primitive(self: *UI) !void {
+    // TODO: multiple triangles per render API call
+    const triangle = DrawTriangle{
+        .verts = .{
+            .{ .pos = vec2{ 0, 0 }, .color = vec4{ 1, 1, 0, 1 } },
+            .{ .pos = vec2{ 1, 0 }, .color = vec4{ 1, 0, 1, 1 } },
+            .{ .pos = vec2{ 0, 1 }, .color = vec4{ 0, 1, 1, 1 } },
+        },
+    };
+
+    const arena = self.build_arena.allocator();
+    const shader = try gfx.Shader.from_srcs(arena, "testing_triangle", .{
+        .vertex =
+        \\#version 330
+        \\in vec2 in_pos; 
+        \\in vec4 in_color;
+        \\out vec4 pass_color;
+        \\void main() { gl_Position = vec4(in_pos, 0, 1); pass_color = in_color; }
+        ,
+        .fragment =
+        \\#version 330
+        \\in vec4 pass_color;
+        \\out vec4 FragColor;
+        \\void main() { FragColor = pass_color; }
+        ,
+    });
+    defer shader.deinit();
+    const vert_data = gfx.VertexBuffer.init(&.{
+        .{ .type = gl.FLOAT, .len = 2 }, // pos
+        .{ .type = gl.FLOAT, .len = 4 }, // color
+    }, 3);
+    const ShaderInputTriangleVert = extern struct {
+        pos: [2]f32,
+        color: [4]f32,
+    };
+    const inputs = [3]ShaderInputTriangleVert{
+        .{ .pos = triangle.verts[0].pos, .color = triangle.verts[0].color },
+        .{ .pos = triangle.verts[1].pos, .color = triangle.verts[1].color },
+        .{ .pos = triangle.verts[2].pos, .color = triangle.verts[2].color },
+    };
+    vert_data.update(utils.sliceAsBytes(ShaderInputTriangleVert, &inputs));
+    defer vert_data.deinit();
+
+    shader.bind();
+    vert_data.draw(gl.TRIANGLES);
 }
