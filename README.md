@@ -1,3 +1,5 @@
+Moved to https://codeberg.org/parada/zig-ui
+
 # An immediate mode style GUI
 **Heavily** inspired by
 [Dear ImGui](https://github.com/ocornut/imgui),
